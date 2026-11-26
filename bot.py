@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from collections import OrderedDict
 
 import aiohttp
 from aiohttp import web
@@ -32,7 +33,7 @@ PORT = int(os.environ.get("PORT", "8080"))
 SELF_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
 
 LOCK_SECONDS = 30 * 24 * 3600  # Keep the authenticated session for 30 days
-PAGE_SIZE = 10
+PAGE_SIZE = 24
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://arc-zh7i.onrender.com/app/")
 
 SECTIONS = {
@@ -51,6 +52,13 @@ prompt: dict[int, int] = {}
 shown: dict[int, list[int]] = {}
 mode: dict[int, str] = {}
 refresh_tasks: dict[int, asyncio.Task] = {}
+
+# Small in-process cache prevents repeat downloads of the same Telegram media.
+media_cache = OrderedDict()
+media_cache_bytes = 0
+MEDIA_CACHE_MAX = 48 * 1024 * 1024
+MEDIA_CACHE_TTL = 600
+media_download_slots = asyncio.Semaphore(4)
 
 
 # ---------- Supabase ----------
@@ -336,7 +344,8 @@ async def api_summary(request):
     if not data:
         return web.json_response({"auth_required": True}, status=401)
     uid, user = data
-    counts = {key: await db_count(key, uid) for key in SECTIONS}
+    count_values = await asyncio.gather(*[db_count(key, uid) for key in SECTIONS])
+    counts = dict(zip(SECTIONS, count_values))
     return web.json_response({"counts": counts, "mode": mode.get(uid, "auto"), "user": user})
 
 
@@ -354,7 +363,7 @@ async def api_media(request):
         page = 0
     url = (f"{SUPABASE_URL}/rest/v1/media?select=id,kind"
            f"&user_id=eq.{uid}&section=eq.{section}"
-           f"&order=id.desc&limit=10&offset={page * 10}")
+           f"&order=id.desc&limit={PAGE_SIZE}&offset={page * PAGE_SIZE}")
     async with session.get(url, headers=_headers()) as r:
         if r.status >= 300:
             logging.error("api_media list %s %s", r.status, await r.text())
@@ -365,66 +374,104 @@ async def api_media(request):
 
 
 async def api_media_file(request):
+    global media_cache_bytes
     data = api_auth(request)
     if not data:
         return web.json_response({"auth_required": True}, status=401)
     uid, _ = data
     row_id = request.match_info["row_id"]
-    url = f"{SUPABASE_URL}/rest/v1/media?select=kind,file_id&id=eq.{row_id}&user_id=eq.{uid}"
-    async with session.get(url, headers=_headers()) as r:
-        if r.status >= 300:
-            return await api_json_error("Database error", 500)
-        rows = await r.json()
-    if not rows:
-        return await api_json_error("File not found", 404)
-    try:
-        # Telegram file delivery can be slow on Render Free; use longer timeouts and retry transient failures.
-        last_error = None
-        for attempt in range(3):
-            try:
-                tg_file = await bot.get_file(rows[0]["file_id"], request_timeout=90)
-                buffer = io.BytesIO()
-                await bot.download_file(tg_file.file_path, buffer, timeout=300, chunk_size=256 * 1024)
-                break
-            except Exception as e:
-                last_error = e
-                logging.warning("Media download attempt %s/3 failed for row=%s: %s", attempt + 1, row_id, e)
-                if attempt < 2:
-                    await asyncio.sleep(1.5 * (attempt + 1))
-        else:
-            raise last_error or RuntimeError("Telegram download failed")
-
-        payload = buffer.getvalue()
+    cache_key = f"{uid}:{row_id}"
+    cached = media_cache.get(cache_key)
+    payload = None
+    kind = None
+    if cached and time.monotonic() - cached[0] < MEDIA_CACHE_TTL:
+        _, payload, kind = cached
+        media_cache.move_to_end(cache_key)
+    else:
+        if cached:
+            media_cache_bytes -= len(cached[1])
+            media_cache.pop(cache_key, None)
+        url = (f"{SUPABASE_URL}/rest/v1/media?select=kind,file_id"
+               f"&id=eq.{row_id}&user_id=eq.{uid}")
+        async with session.get(url, headers=_headers()) as r:
+            if r.status >= 300:
+                return await api_json_error("Database error", 500)
+            rows = await r.json()
+        if not rows:
+            return await api_json_error("File not found", 404)
         kind = rows[0]["kind"]
-        content_type = {
-            "photo": "image/jpeg", "video": "video/mp4",
-            "video_note": "video/mp4", "animation": "video/mp4"
-        }.get(kind, "application/octet-stream")
-        headers = {
-            "Cache-Control": "private, max-age=300",
-            "Accept-Ranges": "bytes",
-            "Content-Disposition": "inline" if kind != "document" else f'attachment; filename="arc-{row_id}"',
-        }
-        range_header = request.headers.get("Range", "")
-        if range_header.startswith("bytes=") and "," not in range_header:
-            try:
-                start_text, end_text = range_header[6:].split("-", 1)
+        async with media_download_slots:
+            # Another request may have populated the cache while this one waited.
+            cached = media_cache.get(cache_key)
+            if cached and time.monotonic() - cached[0] < MEDIA_CACHE_TTL:
+                _, payload, kind = cached
+                media_cache.move_to_end(cache_key)
+            else:
+                last_error = None
+                for attempt in range(3):
+                    try:
+                        tg_file = await bot.get_file(rows[0]["file_id"], request_timeout=45)
+                        buffer = io.BytesIO()
+                        await bot.download_file(
+                            tg_file.file_path, buffer, timeout=120, chunk_size=512 * 1024
+                        )
+                        payload = buffer.getvalue()
+                        break
+                    except Exception as e:
+                        last_error = e
+                        logging.warning(
+                            "Media download attempt %s/3 failed for row=%s: %s",
+                            attempt + 1, row_id, e
+                        )
+                        if attempt < 2:
+                            await asyncio.sleep(0.7 * (attempt + 1))
+                if payload is None:
+                    logging.error("Telegram media download failed row=%s: %s", row_id, last_error)
+                    return await api_json_error(
+                        "Не удалось получить файл из Telegram. Попробуй обновить страницу.", 502
+                    )
+                if len(payload) <= MEDIA_CACHE_MAX:
+                    media_cache[cache_key] = (time.monotonic(), payload, kind)
+                    media_cache_bytes += len(payload)
+                    while media_cache_bytes > MEDIA_CACHE_MAX and media_cache:
+                        _, evicted = media_cache.popitem(last=False)
+                        media_cache_bytes -= len(evicted[1])
+
+    content_type = {
+        "photo": "image/jpeg", "video": "video/mp4",
+        "video_note": "video/mp4", "animation": "video/mp4"
+    }.get(kind, "application/octet-stream")
+    etag = f'W/"{row_id}-{len(payload)}"'
+    headers = {
+        "Cache-Control": "private, max-age=600, stale-while-revalidate=60",
+        "Accept-Ranges": "bytes",
+        "ETag": etag,
+        "Content-Disposition": "inline" if kind != "document" else f'attachment; filename="arc-{row_id}"',
+    }
+    if request.headers.get("If-None-Match") == etag and not request.headers.get("Range"):
+        return web.Response(status=304, headers=headers)
+    range_header = request.headers.get("Range", "")
+    if range_header.startswith("bytes=") and "," not in range_header:
+        try:
+            start_text, end_text = range_header[6:].split("-", 1)
+            if not start_text and end_text:
+                suffix = int(end_text)
+                start = max(0, len(payload) - suffix)
+                end = len(payload) - 1
+            else:
                 start = int(start_text) if start_text else 0
                 end = int(end_text) if end_text else len(payload) - 1
-                if start < 0 or start >= len(payload) or end < start:
-                    return web.Response(status=416, headers={"Content-Range": f"bytes */{len(payload)}"})
-                end = min(end, len(payload) - 1)
-                chunk = payload[start:end + 1]
-                headers["Content-Range"] = f"bytes {start}-{end}/{len(payload)}"
-                headers["Content-Length"] = str(len(chunk))
-                return web.Response(status=206, body=chunk, content_type=content_type, headers=headers)
-            except (ValueError, TypeError):
-                pass
-        headers["Content-Length"] = str(len(payload))
-        return web.Response(body=payload, content_type=content_type, headers=headers)
-    except Exception as e:
-        logging.exception("Telegram media download failed row=%s: %s", row_id, e)
-        return await api_json_error("Не удалось получить файл из Telegram. Попробуй обновить страницу.", 502)
+            if start < 0 or start >= len(payload) or end < start:
+                return web.Response(status=416, headers={"Content-Range": f"bytes */{len(payload)}"})
+            end = min(end, len(payload) - 1)
+            chunk = payload[start:end + 1]
+            headers["Content-Range"] = f"bytes {start}-{end}/{len(payload)}"
+            headers["Content-Length"] = str(len(chunk))
+            return web.Response(status=206, body=chunk, content_type=content_type, headers=headers)
+        except (ValueError, TypeError):
+            pass
+    headers["Content-Length"] = str(len(payload))
+    return web.Response(body=payload, content_type=content_type, headers=headers)
 
 
 async def api_send_media(request):
@@ -545,7 +592,9 @@ async def self_ping():
 
 async def main():
     global session
-    session = aiohttp.ClientSession()
+    timeout = aiohttp.ClientTimeout(total=25, connect=6, sock_read=18)
+    connector = aiohttp.TCPConnector(limit=100, limit_per_host=30, ttl_dns_cache=300, keepalive_timeout=30)
+    session = aiohttp.ClientSession(timeout=timeout, connector=connector)
     app = web.Application()
     app.router.add_get("/", health)
     app.router.add_get("/app", miniapp_redirect)
