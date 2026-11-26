@@ -52,6 +52,9 @@ function formatDate(value: string) {
 
 export default function GalleryApp() {
   const [items, setItems] = useState<MediaItem[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const requestVersion = useRef(0);
   const [page, setPage] = useState(1);
   const [pageInput, setPageInput] = useState("1");
@@ -289,6 +292,8 @@ export default function GalleryApp() {
   }, [active]);
 
   async function selectView(view: typeof activeView) {
+    setSelectedIds(new Set());
+    setSelectionMode(false);
     setActiveCollectionId(null);
     setActiveTagId(null);
     setActiveView(view);
@@ -349,6 +354,35 @@ export default function GalleryApp() {
       setMessage(error instanceof Error ? error.message : "Ошибка сохранения.");
     } finally {
       setMetadataSaving(false);
+    }
+  }
+
+  function toggleSelection(id: string) {
+    setSelectedIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  }
+
+  async function runBulkAction(action: "trash" | "restore" | "favorite" | "unfavorite") {
+    if (!selectedIds.size) return;
+    setBulkBusy(true);
+    try {
+      const response = await fetch("/api/media/bulk", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, ids: [...selectedIds] }),
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Не удалось выполнить групповую операцию.");
+      setSelectedIds(new Set());
+      setSelectionMode(false);
+      if (action === "trash" || action === "restore" || (action === "unfavorite" && activeView === "favorites")) {
+        await loadPage(1, search, activeView, activeCollectionId, activeTagId);
+      } else if (action === "favorite") {
+        setFavoriteIds((current) => new Set([...current, ...selectedIds]));
+      }
+      setMessage("Групповая операция выполнена для " + selectedIds.size + " файлов.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Ошибка групповой операции.");
+    } finally {
+      setBulkBusy(false);
     }
   }
 
@@ -445,7 +479,7 @@ export default function GalleryApp() {
         <div className="content">
           <div className="page-heading">
             <div><div className="eyebrow">ЛИЧНЫЙ АРХИВ</div><h1>{currentTitle}</h1><p>Фото, видео и GIF в одном приватном пространстве.</p></div>
-            <div className="heading-meta">Сначала новые <span>⌄</span></div>
+            <div className="heading-meta"><span>Сначала новые</span><button type="button" onClick={() => setSelectionMode((current) => !current)}>{selectionMode ? "Готово" : "Выбрать"}</button></div>
           </div>
 
           {status === "loading" && <div className="state-panel"><span className="loader" /><h2>Подключение к архиву</h2><p>Проверяем защищённую сессию.</p></div>}
@@ -454,11 +488,12 @@ export default function GalleryApp() {
           {status === "ready" && items.length === 0 && <div className="state-panel"><div className="empty-art"><div className="art-card art-one">▧</div><div className="art-card art-two">▷</div><div className="art-card art-three">GIF</div></div><h2>{search ? "Ничего не найдено" : activeView === "trash" ? "Корзина пуста" : activeView === "favorites" ? "Избранное пока пусто" : "Архив пока пуст"}</h2><p>{search ? "Измените поисковый запрос." : activeView === "trash" ? "Удалённые файлы будут храниться здесь до окончательного удаления." : activeView === "favorites" ? "Отмечайте файлы сердечком, чтобы собрать их здесь." : "Отправляйте фото, видео и GIF своему Telegram-боту. После сохранения они появятся здесь."}</p></div>}
           {status === "ready" && items.length > 0 && <div className="masonry" aria-label="Медиаархив">
             {items.map((item) => <article className="media-card" key={item.id}>
-              <button className="media-open" type="button" onClick={() => void openItem(item)} aria-label={`Открыть ${item.filename}`}>
+              <button className={selectedIds.has(item.id) ? "media-open selected" : "media-open"} type="button" onClick={() => selectionMode ? toggleSelection(item.id) : void openItem(item)} aria-label={selectionMode ? `Выбрать ${item.filename}` : `Открыть ${item.filename}`}>
                 {item.coverUrl ? <Image src={item.coverUrl} alt={item.display_name || item.filename} width={item.width ?? 800} height={item.height ?? 600} unoptimized style={{ width: "100%", height: "auto" }} /> : <div className="media-placeholder">{item.media_type === "video" ? "▷" : item.media_type === "gif" ? "GIF" : "▧"}</div>}
                 {item.media_type === "video" && <span className="media-type-pill">VIDEO</span>}
                 {item.media_type === "gif" && <span className="media-type-pill">GIF</span>}
               </button>
+              {selectionMode && <button className={selectedIds.has(item.id) ? "select-media selected" : "select-media"} type="button" aria-label="Выбрать файл" onClick={() => toggleSelection(item.id)}>{selectedIds.has(item.id) ? "✓" : "+"}</button>}
               <div className="media-meta"><div><strong>{item.display_name || item.filename}</strong><small>{formatDate(item.uploaded_at)} · {formatSize(item.size_bytes)}</small></div>{activeView !== "trash" && <button className={favoriteIds.has(item.id) ? "mini-action selected" : "mini-action"} type="button" aria-label="В избранное" onClick={() => void toggleFavorite(item)}>♡</button>}</div>
             </article>)}
           </div>}
@@ -467,6 +502,7 @@ export default function GalleryApp() {
         </div>
       </section>
 
+      {selectedIds.size > 0 && <div className="bulk-toolbar"><strong>Выбрано: {selectedIds.size}</strong><button className="secondary-button" type="button" disabled={bulkBusy} onClick={() => void runBulkAction(activeView === "trash" ? "restore" : "favorite")}>{activeView === "trash" ? "Восстановить" : "В избранное"}</button>{activeView === "favorites" && <button className="secondary-button" type="button" disabled={bulkBusy} onClick={() => void runBulkAction("unfavorite")}>Убрать из избранного</button>}{activeView !== "trash" && <button className="danger-button" type="button" disabled={bulkBusy} onClick={() => void runBulkAction("trash")}>В корзину</button>}<button className="secondary-button" type="button" disabled={bulkBusy} onClick={() => setSelectedIds(new Set())}>Снять выбор</button></div>}
       {active && <div className="viewer-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setActive(null); }}>
         <section className="viewer" role="dialog" aria-modal="true" aria-label="Просмотр медиа">
           <header className="viewer-header"><div><strong>{title}</strong><small>{formatSize(active.size_bytes)} · {formatDate(active.uploaded_at)}</small></div><button className="viewer-close" type="button" onClick={() => setActive(null)} aria-label="Закрыть">×</button></header>
