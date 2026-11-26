@@ -413,7 +413,9 @@ export default function GalleryApp() {
       }
 
       const archive = zipSync(entries, { level: 0 });
-      const blob = new Blob([archive], { type: "application/zip" });
+      const archiveBytes = new Uint8Array(archive.byteLength);
+      archiveBytes.set(archive);
+      const blob = new Blob([archiveBytes.buffer], { type: "application/zip" });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
