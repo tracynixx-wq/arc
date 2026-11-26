@@ -15,7 +15,7 @@ from urllib.parse import quote
 import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import CommandStart
 from aiogram.types import (
     CallbackQuery,
@@ -164,6 +164,29 @@ async def db_missing_thumbnails(after_id=0):
         return await r.json()
 
 
+_cover_upload_lock = asyncio.Lock()
+_last_cover_upload_at = 0.0
+
+async def send_cover_document(uid, document):
+    """Serialize cover uploads to stay below Telegram per-chat flood limits."""
+    global _last_cover_upload_at
+    async with _cover_upload_lock:
+        while True:
+            wait = 3.2 - (time.monotonic() - _last_cover_upload_at)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                sent = await bot.send_document(
+                    chat_id=uid, document=document, disable_notification=True
+                )
+                _last_cover_upload_at = time.monotonic()
+                return sent
+            except TelegramRetryAfter as exc:
+                _last_cover_upload_at = time.monotonic()
+                delay = max(1, int(exc.retry_after)) + 1
+                logging.warning("Telegram cover upload rate limit; retry in %ss", delay)
+                await asyncio.sleep(delay)
+
 async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
     """Create a short looping animated GIF cover and store its Telegram file_id."""
     try:
@@ -222,10 +245,8 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
                             row_id, error.decode("utf-8", "ignore")[:300])
             return None
 
-        sent = await bot.send_document(
-            chat_id=uid,
-            document=BufferedInputFile(gif_bytes, filename=f"arc-cover-{row_id}.gif"),
-            disable_notification=True,
+        sent = await send_cover_document(
+            uid, BufferedInputFile(gif_bytes, filename=f"arc-cover-{row_id}.gif")
         )
         thumb_id = sent.document.file_id
         try:
@@ -314,9 +335,7 @@ async def get_placeholder_thumbnail(uid, kind):
         animation = BufferedInputFile(
             make_placeholder_image(kind), filename=f"arc-{kind}-cover.gif"
         )
-        sent = await bot.send_document(
-            chat_id=uid, document=animation, disable_notification=True
-        )
+        sent = await send_cover_document(uid, animation)
         thumb_id = sent.document.file_id
         placeholder_thumbnails[kind] = thumb_id
         try:
