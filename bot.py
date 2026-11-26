@@ -366,7 +366,7 @@ async def api_unlock(request):
         body = await request.json()
     except Exception:
         body = {}
-    if body.get("password") != PASSWORD:
+    if not isinstance(body, dict) or body.get("password") != PASSWORD:
         return await api_json_error("Wrong password", 403)
     unlocked[uid] = time.time() + LOCK_SECONDS
     response = web.json_response({"ok": True})
@@ -605,9 +605,12 @@ async def api_toggle_favorite(request):
     if not (row_id.isascii() and row_id.isdecimal()):
         return await api_json_error("Invalid media id", 400)
     try:
-        favorite = bool((await request.json()).get("favorite"))
+        body = await request.json()
     except Exception:
         return await api_json_error("Invalid request")
+    if not isinstance(body, dict) or not isinstance(body.get("favorite"), bool):
+        return await api_json_error("Invalid request")
+    favorite = body["favorite"]
     url = f"{SUPABASE_URL}/rest/v1/media?id=eq.{row_id}&user_id=eq.{uid}"
     async with session.patch(url, json={"is_favorite": favorite},
                              headers=_headers({"Prefer": "return=representation"})) as r:
@@ -643,9 +646,14 @@ async def api_profile(request):
         body = await request.json()
     except Exception:
         return await api_json_error("Invalid request")
+    if not isinstance(body, dict):
+        return await api_json_error("Invalid request")
     accents = {"#a98dff", "#63b3ed", "#70d6a5", "#ff9f70", "#f28bb8", "#f4d06f"}
     accent, theme, density = body.get("accent", "#a98dff"), body.get("theme", "dark"), body.get("density", "comfortable")
-    display_name = str(body.get("display_name", "")).strip()[:32]
+    raw_name = body.get("display_name", "")
+    if not isinstance(raw_name, str) or not isinstance(accent, str) or not isinstance(theme, str) or not isinstance(density, str):
+        return await api_json_error("Некорректные настройки профиля")
+    display_name = raw_name.strip()[:32]
     if accent not in accents or theme not in ("dark", "light") or density not in ("compact", "comfortable"):
         return await api_json_error("Некорректные настройки профиля")
     payload = {"user_id": uid, "display_name": display_name, "accent": accent,
