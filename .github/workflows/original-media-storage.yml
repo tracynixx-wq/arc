@@ -1,0 +1,48 @@
+name: Original media storage
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: audit only, or migrate originals to Supabase
+        required: true
+        type: choice
+        options:
+          - audit
+          - migrate
+        default: audit
+      confirm:
+        description: Type RUN to authorize migration (ignored for audit)
+        required: false
+        type: string
+        default: ''
+      max_new_mib:
+        description: Safety cap for total new uploads in MiB
+        required: true
+        type: number
+        default: 600
+
+concurrency:
+  group: arc-original-storage-backfill
+  cancel-in-progress: false
+
+jobs:
+  storage:
+    if: inputs.mode == 'audit' || inputs.confirm == 'RUN'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Audit or copy originals
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          STORAGE_MODE: ${{ inputs.mode }}
+          MAX_NEW_BYTES: ${{ inputs.max_new_mib * 1024 * 1024 }}
+        run: python original_storage_runner.py
