@@ -25,6 +25,7 @@ type MediaItem = {
 type GalleryResponse = { items: MediaItem[]; page: number; pageSize: number; hasMore: boolean; total: number | null };
 type ViewerFile = { url: string; mimeType: string };
 type CollectionItem = { id: string; name: string; description: string | null; is_system: boolean; system_key: string | null; sort_order: number };
+type TagItem = { id: string; name: string; color: string | null };
 
 declare global {
   interface Window {
@@ -70,6 +71,10 @@ export default function GalleryApp() {
   const [editDescription, setEditDescription] = useState("");
   const [editDate, setEditDate] = useState("");
   const [metadataSaving, setMetadataSaving] = useState(false);
+  const [tags, setTags] = useState<TagItem[]>([]);
+  const [mediaTagIds, setMediaTagIds] = useState<string[]>([]);
+  const [tagName, setTagName] = useState("");
+  const [tagsSaving, setTagsSaving] = useState(false);
   const [activeView, setActiveView] = useState<"all" | "recent" | "favorites" | "videos" | "gifs" | "photos" | "trash">("all");
   const viewTitles = { all: "Все медиа", recent: "Недавно добавленные", favorites: "Избранное", videos: "Видео", gifs: "GIF", photos: "Фото", trash: "Корзина" };
 
@@ -215,6 +220,60 @@ export default function GalleryApp() {
       setMessage(error instanceof Error ? error.message : "Ошибка сохранения коллекций.");
     } finally {
       setCollectionsSaving(false);
+    }
+  }
+
+  useEffect(() => {
+    if (status !== "ready") return;
+    let alive = true;
+    fetch("/api/tags", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Не удалось загрузить теги.");
+        return response.json() as Promise<{ items: TagItem[] }>;
+      })
+      .then((result) => { if (alive) setTags(result.items); })
+      .catch(() => { if (alive) setMessage("Не удалось загрузить теги."); });
+    return () => { alive = false; };
+  }, [status]);
+
+  useEffect(() => {
+    if (!active) { setMediaTagIds([]); return; }
+    let alive = true;
+    fetch("/api/media/" + active.id + "/tags", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Не удалось загрузить теги файла.");
+        return response.json() as Promise<{ items: Array<{ tag_id: string }> }>;
+      })
+      .then((result) => { if (alive) setMediaTagIds(result.items.map((item) => item.tag_id)); })
+      .catch(() => { if (alive) setMessage("Не удалось загрузить теги файла."); });
+    return () => { alive = false; };
+  }, [active]);
+
+  async function createTag() {
+    if (!tagName.trim()) return;
+    const response = await fetch("/api/tags", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: tagName.trim() }),
+    });
+    const result = await response.json() as { item?: TagItem; error?: string };
+    if (!response.ok || !result.item) { setMessage(result.error ?? "Не удалось создать тег."); return; }
+    setTags((current) => [...current, result.item!].sort((a, b) => a.name.localeCompare(b.name, "ru")));
+    setMediaTagIds((current) => current.includes(result.item!.id) ? current : [...current, result.item!.id]);
+    setTagName("");
+  }
+
+  async function saveMediaTags() {
+    if (!active) return;
+    setTagsSaving(true);
+    try {
+      const response = await fetch("/api/media/" + active.id + "/tags", {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ tagIds: mediaTagIds }),
+      });
+      if (!response.ok) throw new Error("Не удалось сохранить теги.");
+      setMessage("Теги обновлены.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Ошибка сохранения тегов.");
+    } finally {
+      setTagsSaving(false);
     }
   }
 
@@ -381,6 +440,7 @@ export default function GalleryApp() {
             {!viewerLoading && !viewerFile && <p>Не удалось загрузить оригинал.</p>}
           </div>
           {editing && <div className="viewer-edit"><label>Название<input value={editName} maxLength={240} onChange={(event) => setEditName(event.target.value)} placeholder={active.filename} /></label><label>Описание<textarea value={editDescription} maxLength={10000} onChange={(event) => setEditDescription(event.target.value)} placeholder="Описание файла" /></label><label>Дата создания<input type="date" value={editDate} onChange={(event) => setEditDate(event.target.value)} /></label><div><button className="secondary-button" type="button" disabled={metadataSaving} onClick={() => void saveMetadata()}>{metadataSaving ? "Сохранение…" : "Сохранить изменения"}</button><button className="secondary-button" type="button" onClick={() => setEditing(false)}>Отмена</button></div></div>}
+          <div className="viewer-tags"><strong>Теги</strong><div className="tag-list">{tags.map((tag) => <label key={tag.id} className="tag-check"><input type="checkbox" checked={mediaTagIds.includes(tag.id)} onChange={(event) => setMediaTagIds((current) => event.target.checked ? [...current, tag.id] : current.filter((id) => id !== tag.id))} /><span>{tag.name}</span></label>)}</div><div className="tag-create"><input aria-label="Новый тег" value={tagName} maxLength={40} onChange={(event) => setTagName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createTag(); }} placeholder="Создать тег…" /><button className="secondary-button" type="button" onClick={() => void createTag()}>Добавить</button><button className="secondary-button" type="button" disabled={tagsSaving} onClick={() => void saveMediaTags()}>{tagsSaving ? "Сохранение…" : "Сохранить теги"}</button></div></div>
           <div className="viewer-collections"><strong>Коллекции</strong>{collections.length === 0 && <span className="collection-empty">Коллекций пока нет</span>}{collections.map((collection) => <label key={collection.id} className="collection-check"><input type="checkbox" checked={mediaCollectionIds.includes(collection.id)} onChange={(event) => setMediaCollectionIds((current) => event.target.checked ? [...current, collection.id] : current.filter((id) => id !== collection.id))} /><span>{collection.name}</span></label>)}<button className="secondary-button" type="button" disabled={collectionsSaving} onClick={() => void saveMediaCollections()}>{collectionsSaving ? "Сохранение…" : "Сохранить коллекции"}</button></div>
           <footer className="viewer-footer"><button className="secondary-button" type="button" onClick={() => setEditing((current) => !current)}>{editing ? "Закрыть редактирование" : "Изменить сведения"}</button><a className="secondary-button" href={viewerFile?.url ?? "#"} download={active.filename} aria-disabled={!viewerFile}>Скачать оригинал</a><button className="secondary-button" type="button" onClick={() => void toggleFavorite(active)}>{favoriteIds.has(active.id) ? "Убрать из избранного" : "В избранное"}</button>{activeView === "trash" ? <><button className="secondary-button" type="button" onClick={() => void restoreItem(active)}>Восстановить</button><button className="danger-button" type="button" onClick={() => void permanentlyDelete(active)}>Удалить навсегда</button></> : <button className="danger-button" type="button" onClick={() => void moveToTrash(active)}>В корзину</button>}</footer>
         </section>
