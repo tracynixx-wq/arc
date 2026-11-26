@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import os
 import subprocess
+import tempfile
 import time
 from collections import OrderedDict
 from urllib.parse import quote
@@ -181,38 +182,52 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
 
         import imageio_ffmpeg
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-        command = [
-            ffmpeg, "-hide_banner", "-loglevel", "error",
-            "-i", "pipe:0", "-t", "2.5", "-an",
-            "-filter_complex",
-            "[0:v]fps=8,scale=320:-1:flags=lanczos,split[a][b];"
-            "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer",
-            "-loop", "0", "-f", "gif", "pipe:1",
-        ]
-        proc = await asyncio.create_subprocess_exec(
-            *command, stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        )
+        # MP4 files often keep their index (moov atom) at the end. FFmpeg
+        # cannot reliably seek such files when they are piped through stdin.
+        # A temporary seekable file avoids the partial-file errors seen in Render logs.
+        temp_path = None
         try:
-            gif_bytes, error = await asyncio.wait_for(
-                proc.communicate(input=media_bytes), timeout=45
+            with tempfile.NamedTemporaryFile(prefix="arc-cover-", suffix=".media", delete=False) as tmp:
+                tmp.write(media_bytes)
+                temp_path = tmp.name
+            command = [
+                ffmpeg, "-hide_banner", "-loglevel", "error",
+                "-i", temp_path, "-t", "2.5", "-an",
+                "-filter_complex",
+                "[0:v]fps=8,scale=320:-1:flags=lanczos,split[a][b];"
+                "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer",
+                "-loop", "0", "-f", "gif", "pipe:1",
+            ]
+            proc = await asyncio.create_subprocess_exec(
+                *command, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
-            logging.warning("animated cover ffmpeg timeout row=%s", row_id)
-            return None
+            try:
+                gif_bytes, error = await asyncio.wait_for(
+                    proc.communicate(), timeout=45
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.communicate()
+                logging.warning("animated cover ffmpeg timeout row=%s", row_id)
+                return None
+        finally:
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    logging.warning("temporary cover input cleanup failed row=%s", row_id)
         if proc.returncode != 0 or not gif_bytes or len(gif_bytes) > 8 * 1024 * 1024:
             logging.warning("animated cover conversion failed row=%s: %s",
                             row_id, error.decode("utf-8", "ignore")[:300])
             return None
 
-        sent = await bot.send_animation(
+        sent = await bot.send_document(
             chat_id=uid,
-            animation=BufferedInputFile(gif_bytes, filename=f"arc-cover-{row_id}.gif"),
+            document=BufferedInputFile(gif_bytes, filename=f"arc-cover-{row_id}.gif"),
             disable_notification=True,
         )
-        thumb_id = sent.animation.file_id
+        thumb_id = sent.document.file_id
         try:
             await bot.delete_message(uid, sent.message_id)
         except Exception as exc:
@@ -299,10 +314,10 @@ async def get_placeholder_thumbnail(uid, kind):
         animation = BufferedInputFile(
             make_placeholder_image(kind), filename=f"arc-{kind}-cover.gif"
         )
-        sent = await bot.send_animation(
-            chat_id=uid, animation=animation, disable_notification=True
+        sent = await bot.send_document(
+            chat_id=uid, document=animation, disable_notification=True
         )
-        thumb_id = sent.animation.file_id
+        thumb_id = sent.document.file_id
         placeholder_thumbnails[kind] = thumb_id
         try:
             await bot.delete_message(uid, sent.message_id)
@@ -678,6 +693,10 @@ async def api_media(request):
         total = int(content_range.split("/")[-1])
     except (ValueError, IndexError):
         total = 0
+    logging.info(
+        "api_media page uid=%s section=%s kind=%s page=%s returned=%s total=%s",
+        uid, section, kind or "all", page, len(items), total
+    )
     return web.json_response({"items": items, "total": total})
 
 
@@ -824,7 +843,10 @@ async def api_media_cover(request):
         buffer = io.BytesIO()
         await bot.download_file(tg_file.file_path, buffer, timeout=30)
         body = buffer.getvalue()
-        mime = "image/gif" if (tg_file.file_path or "").lower().endswith(".gif") else "image/jpeg"
+        path = (tg_file.file_path or "").lower()
+        mime = "image/gif" if path.endswith(".gif") else (
+            "video/mp4" if path.endswith(".mp4") else "image/jpeg"
+        )
         return web.Response(body=body, content_type=mime,
                             headers={"Cache-Control":"private, max-age=3600"})
     except Exception:
