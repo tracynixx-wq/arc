@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     if (filesError) return NextResponse.json({ error: "Could not locate original files." }, { status: 500 });
 
     const byId = new Map((originals ?? []).map((file) => [file.media_id, file]));
-    const files = [];
+    const files: Array<{ id: string; filename: string; sizeBytes: number; url: string }> = [];
     for (const item of media ?? []) {
       const original = byId.get(item.id);
       if (!original) return NextResponse.json({ error: "An original file is missing from storage." }, { status: 409 });
