@@ -47,11 +47,19 @@ export async function PUT(request: Request, context: Context) {
       if (findError) return NextResponse.json({ error: "Could not validate tags." }, { status: 500 });
       if ((found ?? []).length !== ids.length) return NextResponse.json({ error: "One or more tags do not exist." }, { status: 400 });
     }
-    const { error: deleteError } = await supabase.from("media_tags").delete().eq("media_id", id);
-    if (deleteError) return NextResponse.json({ error: "Could not update tags." }, { status: 500 });
-    if (ids.length) {
-      const { error: insertError } = await supabase.from("media_tags").insert(ids.map((tag_id) => ({ media_id: id, tag_id })));
+    const { data: currentRows, error: currentError } = await supabase.from("media_tags").select("tag_id").eq("media_id", id);
+    if (currentError) return NextResponse.json({ error: "Could not load current tags." }, { status: 500 });
+    const currentIds = (currentRows ?? []).map((row) => row.tag_id);
+    const toAdd = ids.filter((value) => !currentIds.includes(value));
+    const toRemove = currentIds.filter((value) => !ids.includes(value));
+
+    if (toAdd.length) {
+      const { error: insertError } = await supabase.from("media_tags").insert(toAdd.map((tag_id) => ({ media_id: id, tag_id })));
       if (insertError) return NextResponse.json({ error: "Could not save tags." }, { status: 500 });
+    }
+    if (toRemove.length) {
+      const { error: deleteError } = await supabase.from("media_tags").delete().eq("media_id", id).in("tag_id", toRemove);
+      if (deleteError) return NextResponse.json({ error: "Could not remove old tags." }, { status: 500 });
     }
     await supabase.from("activity_logs").insert({ action: "media.tags_updated", entity_type: "media", entity_id: id, details: { tag_count: ids.length } });
     return NextResponse.json({ ok: true, tagIds: ids }, { headers: { "Cache-Control": "no-store" } });
