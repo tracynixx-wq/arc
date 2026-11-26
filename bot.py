@@ -172,7 +172,7 @@ async def send_cover_document(uid, document):
     global _last_cover_upload_at
     async with _cover_upload_lock:
         while True:
-            wait = 3.2 - (time.monotonic() - _last_cover_upload_at)
+            wait = 8.0 - (time.monotonic() - _last_cover_upload_at)
             if wait > 0:
                 await asyncio.sleep(wait)
             try:
@@ -186,6 +186,46 @@ async def send_cover_document(uid, document):
                 delay = max(1, int(exc.retry_after)) + 1
                 logging.warning("Telegram cover upload rate limit; retry in %ss", delay)
                 await asyncio.sleep(delay)
+
+async def make_thumbnail_from_image(uid, image_file_id, row_id):
+    """Turn Telegram's native still thumbnail into a small looping animated GIF."""
+    try:
+        tg_file = await bot.get_file(image_file_id, request_timeout=20)
+        image_buffer = io.BytesIO()
+        await bot.download_file(tg_file.file_path, image_buffer, timeout=30)
+        from PIL import Image
+        source = Image.open(io.BytesIO(image_buffer.getvalue())).convert("RGB")
+        source.thumbnail((320, 400), Image.Resampling.LANCZOS)
+        width, height = source.size
+        frames = []
+        for step in range(12):
+            zoom = 1.0 + (step / 11) * 0.07
+            crop_w = max(1, int(width / zoom))
+            crop_h = max(1, int(height / zoom))
+            left = (width - crop_w) // 2
+            top = (height - crop_h) // 2
+            frame = source.crop((left, top, left + crop_w, top + crop_h))
+            frame = frame.resize((width, height), Image.Resampling.LANCZOS)
+            frames.append(frame)
+        output = io.BytesIO()
+        frames[0].save(
+            output, format="GIF", save_all=True, append_images=frames[1:],
+            duration=140, loop=0, optimize=True
+        )
+        gif_bytes = output.getvalue()
+        if not gif_bytes or len(gif_bytes) > 4 * 1024 * 1024:
+            return None
+        sent = await send_cover_document(
+            uid, BufferedInputFile(gif_bytes, filename=f"arc-cover-{row_id}.gif")
+        )
+        thumb_id = sent.document.file_id
+        await safe_delete(uid, sent.message_id)
+        logging.info("animated GIF cover generated from native thumbnail row=%s", row_id)
+        return thumb_id
+    except Exception:
+        logging.exception("native-thumbnail GIF conversion failed row=%s", row_id)
+        return None
+
 
 async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
     """Create a short looping animated GIF cover and store its Telegram file_id."""
@@ -262,26 +302,24 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
 async def generate_and_attach_thumbnail(uid, file_id, unique_id):
     try:
         url = (
-            f"{SUPABASE_URL}/rest/v1/media?select=id"
+            f"{SUPABASE_URL}/rest/v1/media?select=id,kind,thumb_file_id"
             f"&user_id=eq.{uid}&file_unique_id=eq.{unique_id}&limit=1"
         )
         async with session.get(url, headers=_headers()) as r:
             rows = await r.json() if r.status < 300 else []
         if not rows:
             return
-        row_id = rows[0]["id"]
-        kind_url = (
-            f"{SUPABASE_URL}/rest/v1/media?select=kind"
-            f"&user_id=eq.{uid}&file_unique_id=eq.{unique_id}&limit=1"
-        )
-        async with session.get(kind_url, headers=_headers()) as r:
-            kind_rows = await r.json() if r.status < 300 else []
-        kind = kind_rows[0]["kind"] if kind_rows else "video"
+        row = rows[0]
+        row_id = row["id"]
         thumb_id = await make_thumbnail(uid, file_id, row_id)
-        if not thumb_id:
-            thumb_id = await get_placeholder_thumbnail(uid, kind)
+        if not thumb_id and row.get("thumb_file_id"):
+            thumb_id = await make_thumbnail_from_image(
+                uid, row["thumb_file_id"], row_id
+            )
         if thumb_id:
             await db_set_thumbnail(row_id, thumb_id)
+        else:
+            logging.warning("Cover remains pending; will retry in maintenance pass row=%s", row_id)
     except Exception:
         logging.exception("async thumbnail attach failed unique_id=%s", unique_id)
 
@@ -350,7 +388,8 @@ async def get_placeholder_thumbnail(uid, kind):
 
 async def backfill_missing_thumbnails():
     """Upgrade every video-like media cover to an animated GIF using keyset pagination."""
-    await asyncio.sleep(8)
+    # Wait until Render's rolling deployment has stopped the previous instance.
+    await asyncio.sleep(45)
     last_id = 0
     total = done = failed = 0
     while True:
@@ -371,20 +410,24 @@ async def backfill_missing_thumbnails():
             thumb_id = await make_thumbnail(
                 int(row["user_id"]), row["file_id"], row["id"], backfill=True
             )
-            if not thumb_id:
-                thumb_id = await get_placeholder_thumbnail(
-                    int(row["user_id"]), row["kind"]
+            if not thumb_id and row.get("thumb_file_id"):
+                thumb_id = await make_thumbnail_from_image(
+                    int(row["user_id"]), row["thumb_file_id"], row["id"]
                 )
             if thumb_id and await db_set_thumbnail(row["id"], thumb_id):
                 done += 1
             else:
                 failed += 1
+                logging.warning(
+                    "Cover still missing row=%s kind=%s; retrying next maintenance pass",
+                    row["id"], row["kind"]
+                )
             if total % 10 == 0:
                 logging.info(
                     "Thumbnail backfill progress: %s generated=%s failed=%s",
                     total, done, failed
                 )
-            await asyncio.sleep(0.35)
+            await asyncio.sleep(1.0)
     logging.info(
         "Thumbnail backfill finished: generated=%s failed=%s total=%s",
         done, failed, total
