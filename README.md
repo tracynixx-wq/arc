@@ -22,15 +22,13 @@ ARC 1.0 foundation. This branch is isolated from `main`; no production service i
 ## Repository layout
 
 - `apps/web` — Next.js web application.
-- `apps/bot` — Telegram ingestion and archive delivery.
-- `apps/worker` — idempotent background job processor.
-- `packages/core` — shared domain types and validation.
+- `apps/worker` — idempotent Telegram ingestion, GIF cover generation and archive delivery.
 - `supabase/migrations` — reviewed database migrations.
 - `docs` — architecture, decisions, operations and test strategy.
 
 ## Local development
 
-The app is being introduced in staged commits. Never put secrets in Git. Copy `.env.example` to a local environment file only after the required credentials are provisioned.
+The app is being introduced in staged commits. Never put secrets in Git. Copy `.env.example` to a local environment file only after the required credentials are provisioned. The archive delivery worker requires the latest queue-claim migration before deployment. Independent backups and Local Bot API Server hosting are not yet provisioned.
 
 ## Environments
 
