@@ -56,6 +56,7 @@ prompt: dict[int, int] = {}
 shown: dict[int, list[int]] = {}
 mode: dict[int, str] = {}
 refresh_tasks: dict[int, asyncio.Task] = {}
+thumbnail_tasks: set[asyncio.Task] = set()
 
 # Small in-process cache prevents repeat downloads of the same Telegram media.
 media_cache = OrderedDict()
@@ -222,6 +223,24 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
     except Exception:
         logging.exception("thumbnail generation failed row=%s backfill=%s", row_id, backfill)
         return None
+
+
+async def generate_and_attach_thumbnail(uid, file_id, unique_id):
+    try:
+        url = (
+            f"{SUPABASE_URL}/rest/v1/media?select=id"
+            f"&user_id=eq.{uid}&file_unique_id=eq.{unique_id}&limit=1"
+        )
+        async with session.get(url, headers=_headers()) as r:
+            rows = await r.json() if r.status < 300 else []
+        if not rows:
+            return
+        row_id = rows[0]["id"]
+        thumb_id = await make_thumbnail(uid, file_id, row_id)
+        if thumb_id:
+            await db_set_thumbnail(row_id, thumb_id)
+    except Exception:
+        logging.exception("async thumbnail attach failed unique_id=%s", unique_id)
 
 
 async def backfill_missing_thumbnails():
@@ -857,18 +876,13 @@ async def on_message(m: Message):
         section, kind, file_id, unique_id, thumb_file_id, file_name = item
         saved = await db_add(uid, section, kind, file_id, unique_id, thumb_file_id, file_name)
         if saved:
-            # Telegram normally supplies video thumbnails. Generate one if it does not.
+            # Telegram normally supplies video thumbnails; generate one asynchronously if absent.
             if not thumb_file_id and kind in ("video", "video_note", "animation"):
-                cover_id = await make_thumbnail(uid, file_id, f"new-{unique_id[:12]}")
-                if cover_id:
-                    async with session.get(
-                        f"{SUPABASE_URL}/rest/v1/media?select=id"
-                        f"&user_id=eq.{uid}&file_unique_id=eq.{unique_id}&limit=1",
-                        headers=_headers(),
-                    ) as r:
-                        saved_rows = await r.json() if r.status < 300 else []
-                    if saved_rows:
-                        await db_set_thumbnail(saved_rows[0]["id"], cover_id)
+                task = asyncio.create_task(
+                    generate_and_attach_thumbnail(uid, file_id, unique_id)
+                )
+                thumbnail_tasks.add(task)
+                task.add_done_callback(thumbnail_tasks.discard)
             await safe_delete(chat_id, m.message_id)
         else:
             logging.error("Media save failed; original message retained user=%s", uid)
