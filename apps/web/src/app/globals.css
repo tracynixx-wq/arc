@@ -173,7 +173,10 @@ h1 { margin: 9px 0 7px; font-size: clamp(26px, 3vw, 35px); letter-spacing: -.045
   .viewer-stage { flex: 1; max-height: none; }
   .viewer-stage img, .viewer-stage video { max-height: 55vh; }
   .viewer-footer { padding-bottom: max(13px,env(safe-area-inset-bottom)); }
-  .custom-collections { display: none; }
+  .custom-collections { display: flex; align-items: center; gap: 5px; max-width: 100%; margin-top: 9px; overflow-x: auto; }
+  .custom-collections .nav-caption { display: none; }
+  .custom-collection-row { flex: 0 0 auto; padding: 5px 8px; border: 1px solid #2a2e39; border-radius: 7px; background: #141720; }
+  .create-collection { flex: 0 0 auto; }
 }
 
 
