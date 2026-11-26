@@ -259,6 +259,7 @@ async function processIngest(job: TelegramJob) {
       telegram_file_unique_id: typeof payload.file_unique_id === "string" ? payload.file_unique_id : null,
       filename_conflict: filenameConflict,
       original_download_path: downloaded.sourcePath,
+      backup_status: "not_configured",
       telegram_media_group_id: typeof payload.media_group_id === "string" ? payload.media_group_id : null,
     };
 
@@ -310,18 +311,13 @@ async function processIngest(job: TelegramJob) {
         payload: { source: "telegram_ingest" },
       });
     }
-    processingJobs.push({
-      media_id: mediaId,
-      job_type: "backup",
-      idempotency_key: `backup:${mediaId}:original:v1`,
-      priority: 40,
-      payload: { file_role: "original", storage_bucket: "arc-originals", storage_key: objectKey },
-    });
-    const { error: jobsError } = await supabase.from("processing_jobs").upsert(processingJobs, {
-      onConflict: "idempotency_key",
-      ignoreDuplicates: true,
-    });
-    if (jobsError) throw new Error(`Could not enqueue follow-up jobs: ${jobsError.message}`);
+    if (processingJobs.length) {
+      const { error: jobsError } = await supabase.from("processing_jobs").upsert(processingJobs, {
+        onConflict: "idempotency_key",
+        ignoreDuplicates: true,
+      });
+      if (jobsError) throw new Error(`Could not enqueue follow-up jobs: ${jobsError.message}`);
+    }
 
     await markTelegramSuccess(job);
     await deleteSourceMessage(job.telegram_chat_id, job.telegram_message_id, mediaId);
