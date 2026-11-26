@@ -682,18 +682,10 @@ async def site_logout(_):
     return response
 
 
-async def site_index(_):
-    index_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "site", "index.html")
-    if not os.path.isfile(index_path):
-        logging.error("Standalone site index missing: %s", index_path)
-        return web.Response(text="ARC website build is missing", status=503)
-    return web.FileResponse(index_path, headers={"Cache-Control": "no-store"})
-
-
 async def api_me(request):
     data = api_user(request)
     if not data:
-        return web.json_response({"error": "Invalid Telegram session"}, status=401)
+        return web.json_response({"error": "Invalid website session"}, status=401)
     uid, user = data
     return web.json_response({"authorized": is_auth(uid) or session_uid(request.cookies.get("arc_session", "")) == uid, "user": user})
 
