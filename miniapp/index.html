@@ -68,7 +68,8 @@ else preview='<div class="pin-doc"><div>📄<small>Документ</small></div
 const label={photo:'Фото',video:'Видео',video_note:'Видеокружок',animation:'GIF / анимация',document:'Документ'}[kind]||'Файл';
 return '<article class="pin" data-kind="'+kind+'" data-open="'+x.id+'">'+preview+'<div class="pin-overlay"><div class="pin-title">'+label+'</div><div class="pin-actions"><button class="smallbtn" data-send="'+x.id+'">↗</button><button class="smallbtn delete" data-delete="'+x.id+'">×</button></div></div></article>'}).join('');
 $('files').innerHTML='<div class="masonry">'+cards+'</div>'+(hasMore?'<div id="loadMore" class="load-more">Прокрути ниже для загрузки следующих файлов</div>':'<div class="load-more">Все файлы загружены</div>');
-document.querySelectorAll('[data-open]').forEach(card=>card.onclick=e=>{if(e.target.closest('button'))return;openViewer(card.dataset.open)});\ndocument.querySelectorAll('[data-delete]').forEach(b=>b.onclick=()=>delFile(b.dataset.delete));document.querySelectorAll('[data-send]').forEach(b=>b.onclick=()=>sendFile(b.dataset.send,b));
+document.querySelectorAll('[data-open]').forEach(card=>card.onclick=e=>{if(e.target.closest('button'))return;openViewer(card.dataset.open)});
+document.querySelectorAll('[data-delete]').forEach(b=>b.onclick=()=>delFile(b.dataset.delete));document.querySelectorAll('[data-send]').forEach(b=>b.onclick=()=>sendFile(b.dataset.send,b));
 if(mediaObserver)mediaObserver.disconnect();
 mediaObserver=new IntersectionObserver(entries=>{for(const entry of entries){const v=entry.target;if(entry.isIntersecting){if(!v.src&&v.dataset.src)v.src=v.dataset.src;const p=v.play();if(p&&p.catch)p.catch(()=>{})}else{v.pause();if(v.src){v.removeAttribute('src');v.load()}}}},{rootMargin:'100px 0px'});
 document.querySelectorAll('.pin-video').forEach(v=>mediaObserver.observe(v));
