@@ -37,7 +37,7 @@ PORT = int(os.environ.get("PORT", "8080"))
 SELF_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
 
 LOCK_SECONDS = 30 * 24 * 3600  # Keep the authenticated session for 30 days
-PAGE_SIZE = 12
+PAGE_SIZE = 10
 WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://arc-zh7i.onrender.com/app/")
 
 SECTIONS = {
