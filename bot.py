@@ -57,6 +57,7 @@ shown: dict[int, list[int]] = {}
 mode: dict[int, str] = {}
 refresh_tasks: dict[int, asyncio.Task] = {}
 thumbnail_tasks: set[asyncio.Task] = set()
+placeholder_thumbnails: dict[str, str] = {}
 
 # Small in-process cache prevents repeat downloads of the same Telegram media.
 media_cache = OrderedDict()
@@ -236,11 +237,85 @@ async def generate_and_attach_thumbnail(uid, file_id, unique_id):
         if not rows:
             return
         row_id = rows[0]["id"]
+        kind_url = (
+            f"{SUPABASE_URL}/rest/v1/media?select=kind"
+            f"&user_id=eq.{uid}&file_unique_id=eq.{unique_id}&limit=1"
+        )
+        async with session.get(kind_url, headers=_headers()) as r:
+            kind_rows = await r.json() if r.status < 300 else []
+        kind = kind_rows[0]["kind"] if kind_rows else "video"
         thumb_id = await make_thumbnail(uid, file_id, row_id)
+        if not thumb_id:
+            thumb_id = await get_placeholder_thumbnail(uid, kind)
         if thumb_id:
             await db_set_thumbnail(row_id, thumb_id)
     except Exception:
         logging.exception("async thumbnail attach failed unique_id=%s", unique_id)
+
+
+def make_placeholder_image(kind):
+    """Render a compact, branded cover when the original media cannot be downloaded."""
+    from PIL import Image, ImageDraw, ImageFont
+    width, height = 480, 600
+    image = Image.new("RGB", (width, height))
+    pixels = image.load()
+    top = (32, 27, 58) if kind == "video_note" else ((31, 39, 67) if kind == "video" else (49, 30, 66))
+    bottom = (105, 68, 160) if kind == "video_note" else ((49, 112, 145) if kind == "video" else (151, 73, 139))
+    for y in range(height):
+        t = y / max(1, height - 1)
+        color = tuple(int(top[c] * (1 - t) + bottom[c] * t) for c in range(3))
+        for x in range(width):
+            pixels[x, y] = color
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((76, 100, 404, 428), radius=54, outline=(255, 255, 255), width=5)
+    if kind == "video_note":
+        draw.ellipse((154, 178, 326, 350), outline=(255, 255, 255), width=8)
+        draw.ellipse((218, 242, 262, 286), fill=(255, 255, 255))
+        label = "VIDEO NOTE"
+    elif kind == "animation":
+        draw.polygon([(204, 174), (204, 354), (334, 264)], fill=(255, 255, 255))
+        draw.ellipse((130, 205, 182, 257), outline=(255, 255, 255), width=7)
+        label = "GIF"
+    else:
+        draw.polygon([(204, 174), (204, 354), (334, 264)], fill=(255, 255, 255))
+        label = "VIDEO"
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 34)
+        small = ImageFont.truetype("DejaVuSans.ttf", 21)
+    except OSError:
+        font = ImageFont.load_default()
+        small = font
+    box = draw.textbbox((0, 0), label, font=font)
+    draw.text(((width - (box[2] - box[0])) / 2, 464), label, font=font, fill=(255, 255, 255))
+    subtitle = "ARC MEDIA ARCHIVE"
+    box = draw.textbbox((0, 0), subtitle, font=small)
+    draw.text(((width - (box[2] - box[0])) / 2, 526), subtitle, font=small, fill=(226, 220, 244))
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=82, optimize=True)
+    return output.getvalue()
+
+
+async def get_placeholder_thumbnail(uid, kind):
+    """Upload one reusable fallback cover per media kind."""
+    if kind in placeholder_thumbnails:
+        return placeholder_thumbnails[kind]
+    try:
+        photo = BufferedInputFile(
+            make_placeholder_image(kind), filename=f"arc-{kind}-cover.jpg"
+        )
+        sent = await bot.send_photo(
+            chat_id=uid, photo=photo, disable_notification=True
+        )
+        thumb_id = sent.photo[-1].file_id
+        placeholder_thumbnails[kind] = thumb_id
+        try:
+            await bot.delete_message(uid, sent.message_id)
+        except Exception as exc:
+            logging.warning("placeholder message cleanup failed: %s", exc)
+        return thumb_id
+    except Exception:
+        logging.exception("placeholder cover upload failed kind=%s", kind)
+        return None
 
 
 async def backfill_missing_thumbnails():
@@ -257,6 +332,10 @@ async def backfill_missing_thumbnails():
         thumb_id = await make_thumbnail(
             int(row["user_id"]), row["file_id"], row["id"], backfill=True
         )
+        if not thumb_id:
+            thumb_id = await get_placeholder_thumbnail(
+                int(row["user_id"]), row["kind"]
+            )
         if thumb_id and await db_set_thumbnail(row["id"], thumb_id):
             done += 1
         else:
