@@ -6,6 +6,11 @@ create table if not exists media (
   file_id text not null,
   file_unique_id text not null,
   thumb_file_id text,
+
+  thumbnail_status text not null default 'pending'
+    check (thumbnail_status in ('pending','ready','failed','not_required')),
+  thumbnail_error text,
+  thumbnail_updated_at timestamptz,
   file_name text,
   is_favorite boolean not null default false,
   created_at timestamptz default now(),
@@ -27,3 +32,20 @@ create table if not exists user_profiles (
 
 alter table media enable row level security;
 alter table user_profiles enable row level security;
+
+-- Keep this schema usable for both fresh installs and existing databases.
+alter table media add column if not exists thumbnail_status text not null default 'pending';
+alter table media add column if not exists thumbnail_error text;
+alter table media add column if not exists thumbnail_updated_at timestamptz;
+
+update media
+set thumbnail_status = case
+  when kind in ('video','video_note','animation') and thumb_file_id like 'storage:%' then 'ready'
+  when kind in ('video','video_note','animation') then 'pending'
+  else 'not_required'
+end
+where thumbnail_status is null;
+
+create index if not exists media_thumbnail_backfill_idx
+  on media (thumbnail_status, id)
+  where kind in ('video','video_note','animation');
