@@ -384,7 +384,7 @@ async def api_media(request):
     if kind not in ("photo", "video", "animation", "video_note"):
         kind = ""
     query = request.query.get("q", "").strip()[:100]
-    query = query.replace("%", "").replace("*", "").replace(",", " ").replace("(", "").replace(")", "")
+    query = query.replace("%", "").replace("*", "").replace(",", " ").replace("(", " ").replace(")", " ").replace("\\", " ").replace(chr(34), " ").replace("'", " ").strip()
     params = {
         "select": "id,kind,thumb_file_id,file_name,is_favorite",
         "user_id": f"eq.{uid}", "order": "id.desc",
@@ -421,6 +421,8 @@ async def api_media_file(request):
         return web.json_response({"auth_required": True}, status=401)
     uid, _ = data
     row_id = request.match_info["row_id"]
+    if not (row_id.isascii() and row_id.isdecimal()):
+        return await api_json_error("Invalid media id", 400)
     cache_key = f"{uid}:{row_id}"
     cached = media_cache.get(cache_key)
     payload = None
@@ -533,6 +535,8 @@ async def api_media_cover(request):
         return web.json_response({"auth_required": True}, status=401)
     uid, _ = data
     row_id = request.match_info["row_id"]
+    if not (row_id.isascii() and row_id.isdecimal()):
+        return await api_json_error("Invalid media id", 400)
     url = (f"{SUPABASE_URL}/rest/v1/media?select=kind,file_id,thumb_file_id"
            f"&id=eq.{row_id}&user_id=eq.{uid}")
     async with session.get(url, headers=_headers()) as r:
@@ -565,6 +569,8 @@ async def api_toggle_favorite(request):
         return web.json_response({"auth_required": True}, status=401)
     uid, _ = data
     row_id = request.match_info["row_id"]
+    if not (row_id.isascii() and row_id.isdecimal()):
+        return await api_json_error("Invalid media id", 400)
     try:
         favorite = bool((await request.json()).get("favorite"))
     except Exception:
@@ -627,6 +633,8 @@ async def api_send_media(request):
         return web.json_response({"auth_required": True}, status=401)
     uid, _ = data
     row_id = request.match_info["row_id"]
+    if not (row_id.isascii() and row_id.isdecimal()):
+        return await api_json_error("Invalid media id", 400)
     url = f"{SUPABASE_URL}/rest/v1/media?select=kind,file_id&id=eq.{row_id}&user_id=eq.{uid}"
     async with session.get(url, headers=_headers()) as r:
         if r.status >= 300:
