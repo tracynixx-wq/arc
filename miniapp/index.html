@@ -48,7 +48,7 @@ h1{font-size:23px;line-height:1.15;letter-spacing:-.5px;margin:3px 0 4px}.muted{
 </main><div class="footer">ARC · PRIVATE MEDIA VAULT</div>
 <script>
 const tg=window.Telegram?.WebApp;tg?.ready();tg?.expand();tg?.setHeaderColor?.('#101116');tg?.setBackgroundColor?.('#101116');
-const initData=tg?.initData||'';let section='videos',page=0,total=0,allItems=[],mode='auto',loadingMore=false,hasMore=false;const PAGE_SIZE=24;
+const initData=tg?.initData||'';let section='videos',page=0,total=0,allItems=[],mode='auto',loadingMore=false,hasMore=false;const PAGE_SIZE=12;
 const $=id=>document.getElementById(id);const names={videos:'Видео',circles:'Кружки',leaks:'Другое'};
 async function api(path,opts={}){const r=await fetch(path,{...opts,headers:{'Content-Type':'application/json','X-Telegram-Init-Data':initData,...opts.headers}});let d={};try{d=await r.json()}catch{}if(r.status===401&&d.auth_required){showLogin();throw new Error('auth')}if(!r.ok)throw new Error(d.error||'Ошибка запроса');return d}
 function showLogin(){$('home').classList.add('hidden');$('library').classList.add('hidden');$('login').classList.remove('hidden')}
@@ -70,7 +70,7 @@ return '<article class="pin" data-kind="'+kind+'">'+preview+'<div class="pin-ove
 $('files').innerHTML='<div class="masonry">'+cards+'</div>'+(hasMore?'<div id="loadMore" class="load-more">Прокрути ниже для загрузки следующих файлов</div>':'<div class="load-more">Все файлы загружены</div>');
 document.querySelectorAll('[data-delete]').forEach(b=>b.onclick=()=>delFile(b.dataset.delete));document.querySelectorAll('[data-send]').forEach(b=>b.onclick=()=>sendFile(b.dataset.send,b));
 if(mediaObserver)mediaObserver.disconnect();
-mediaObserver=new IntersectionObserver(entries=>{for(const entry of entries){const v=entry.target;if(entry.isIntersecting){if(!v.src&&v.dataset.src)v.src=v.dataset.src;const p=v.play();if(p&&p.catch)p.catch(()=>{})}else{v.pause()}}},{rootMargin:'500px 0px'});
+mediaObserver=new IntersectionObserver(entries=>{for(const entry of entries){const v=entry.target;if(entry.isIntersecting){if(!v.src&&v.dataset.src)v.src=v.dataset.src;const p=v.play();if(p&&p.catch)p.catch(()=>{})}else{v.pause();if(v.src){v.removeAttribute('src');v.load()}}}},{rootMargin:'100px 0px'});
 document.querySelectorAll('.pin-video').forEach(v=>mediaObserver.observe(v));
 }
 async function sendFile(id,button){button.disabled=true;button.textContent='Отправляю…';try{await api('/api/media/'+id+'/send',{method:'POST'});tg?.HapticFeedback?.notificationOccurred?.('success');alert('Медиа отправлено в чат с ботом. Его можно переслать дальше.')}catch(e){alert(e.message==='auth'?'Сначала открой архив по паролю':'Не удалось отправить медиа в Telegram')}finally{button.disabled=false;button.textContent='↗'}}
