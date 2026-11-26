@@ -22,11 +22,11 @@ type TelegramMessage = {
 };
 type TelegramUpdate = { update_id: number; message?: TelegramMessage };
 
-async function sendTelegramMessage(token: string, chatId: number, text: string) {
+async function sendTelegramMessage(token: string, chatId: number, text: string, replyMarkup?: Record<string, unknown>) {
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true }),
+    body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) }),
     cache: "no-store",
   });
   if (!response.ok) throw new Error("Telegram sendMessage failed");
@@ -85,7 +85,7 @@ export async function POST(request: Request) {
         const greeting = webUrl
           ? `ARC подключён. Откройте личный архив: ${webUrl}\nОтправляйте сюда фото, видео и GIF — после надёжного сохранения они появятся на сайте.`
           : "ARC подключён. Отправляйте сюда фото, видео и GIF — после надёжного сохранения они появятся в архиве.";
-        await sendTelegramMessage(token, message.chat.id, greeting);
+        await sendTelegramMessage(token, message.chat.id, greeting, webUrl ? { inline_keyboard: [[{ text: "Открыть ARC", web_app: { url: webUrl } }]] } : undefined);
       } else if (command === "/help") {
         await sendTelegramMessage(token, message.chat.id,
           "/status — состояние очередей\n/stats — статистика архива\n/send_all — отправить архив в этот чат\n/cancel — остановить ожидающую отправку\n/help — помощь");
