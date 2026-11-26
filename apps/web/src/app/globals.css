@@ -113,3 +113,65 @@ h1 { margin: 9px 0 7px; font-size: clamp(26px, 3vw, 35px); letter-spacing: -.045
   .pagination { flex-wrap: wrap; gap: 8px; }
   .page-jump { order: 3; width: 100%; justify-content: center; }
 }
+
+
+/* Gallery and viewer */
+.navigation button, .secondary-button, .danger-button, .mini-action, .viewer-close, .create-collection { cursor: pointer; }
+.navigation button { border: 0; background: transparent; text-align: left; }
+.navigation button.active { background: var(--accent-soft); }
+.state-panel { flex: 1; min-height: 430px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 48px 20px; }
+.state-panel h2 { margin: 0 0 9px; font-size: 17px; letter-spacing: -.02em; }
+.state-panel p { max-width: 430px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.8; }
+.state-icon { width: 42px; height: 42px; display: grid; place-items: center; margin-bottom: 16px; border: 1px solid #44375e; border-radius: 14px; background: var(--accent-soft); color: #c4b5fd; font-size: 20px; }
+.loader { width: 25px; height: 25px; border: 2px solid #34313e; border-top-color: #b7a3f6; border-radius: 50%; animation: arc-spin .8s linear infinite; margin-bottom: 16px; }
+@keyframes arc-spin { to { transform: rotate(360deg); } }
+.masonry { columns: 4 190px; column-gap: 16px; margin-top: 34px; }
+.media-card { display: inline-block; width: 100%; margin: 0 0 17px; break-inside: avoid; border: 1px solid #20242e; border-radius: 12px; overflow: hidden; background: #111319; }
+.media-open { display: block; position: relative; width: 100%; padding: 0; border: 0; background: #171922; cursor: pointer; }
+.media-open img { display: block; }
+.media-placeholder { min-height: 170px; display: grid; place-items: center; color: #aaa0c5; background: linear-gradient(145deg,#22202c,#151821); font-size: 27px; }
+.media-type-pill { position: absolute; top: 10px; left: 10px; padding: 5px 7px; border: 1px solid #ffffff24; border-radius: 5px; background: #08090dcc; color: #eee9ff; font-size: 8px; font-weight: 750; letter-spacing: .08em; }
+.media-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 11px 11px 12px; }
+.media-meta > div { min-width: 0; display: grid; gap: 5px; }
+.media-meta strong { overflow: hidden; color: #e7e8ee; font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.media-meta small { color: #858b99; font-size: 9px; }
+.mini-action { flex: 0 0 auto; width: 28px; height: 28px; border: 1px solid #2a2e39; border-radius: 8px; background: #171a22; color: #9da2af; }
+.mini-action.selected { border-color: #6b548f; color: #d3baff; background: #292039; }
+.pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 25px 0 6px; color: #a4a9b5; font-size: 10px; }
+.secondary-button, .danger-button { min-height: 32px; display: inline-flex; align-items: center; justify-content: center; padding: 0 11px; border: 1px solid #343947; border-radius: 8px; background: #171a22; color: #d5d8e0; font-size: 10px; }
+.secondary-button:disabled, .danger-button:disabled { opacity: .4; cursor: not-allowed; }
+.danger-button { border-color: #653b48; background: #291a20; color: #ffbdca; }
+.viewer-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 22px; background: #05060bdc; backdrop-filter: blur(12px); }
+.viewer { width: min(1120px, 100%); max-height: min(92vh, 1000px); display: flex; flex-direction: column; overflow: auto; border: 1px solid #303441; border-radius: 15px; background: #101219; box-shadow: 0 25px 100px #0009; }
+.viewer-header { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 17px; border-bottom: 1px solid var(--line); }
+.viewer-header > div { min-width: 0; display: grid; gap: 5px; }
+.viewer-header strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.viewer-header small { color: var(--muted); font-size: 9px; }
+.viewer-close { width: 31px; height: 31px; border: 1px solid #343947; border-radius: 8px; background: #1b1e27; color: #e5e7ee; font-size: 20px; }
+.viewer-stage { min-height: 280px; max-height: 62vh; display: grid; place-items: center; padding: 18px; background: #08090d; }
+.viewer-stage img, .viewer-stage video { display: block; max-width: 100%; max-height: 60vh; object-fit: contain; }
+.viewer-collections { display: flex; align-items: center; flex-wrap: wrap; gap: 9px 13px; padding: 13px 17px; border-top: 1px solid var(--line); }
+.viewer-collections > strong { width: 100%; color: #b6bbc7; font-size: 10px; }
+.collection-check { display: inline-flex; align-items: center; gap: 6px; color: #c1c5cf; font-size: 10px; }
+.collection-check input { accent-color: #a78bfa; }
+.collection-empty { color: var(--muted); font-size: 10px; }
+.viewer-footer { display: flex; flex-wrap: wrap; gap: 8px; padding: 13px 17px; border-top: 1px solid var(--line); }
+.toast { position: fixed; right: 20px; bottom: 20px; z-index: 70; max-width: min(420px,calc(100vw - 40px)); display: flex; align-items: center; gap: 15px; padding: 12px 14px; border: 1px solid #4b4260; border-radius: 9px; background: #1b1824; color: #e6dcff; font-size: 11px; box-shadow: 0 10px 40px #0008; }
+.toast button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 16px; }
+.custom-collections { margin-top: 20px; }
+.custom-collection-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 5px 10px; color: #9ea4b1; font-size: 10px; }
+.custom-collection-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.custom-collection-row button { border: 0; background: transparent; color: #858b99; cursor: pointer; }
+.create-collection { margin-top: 9px; padding: 8px 10px; border: 1px dashed #3c3650; border-radius: 8px; background: transparent; color: #b6a7dc; text-align: left; font-size: 10px; }
+@media (max-width: 1050px) { .masonry { columns: 3 170px; } }
+@media (max-width: 760px) {
+  .masonry { columns: 2 135px; column-gap: 10px; margin-top: 23px; }
+  .media-card { margin-bottom: 10px; }
+  .media-meta { padding: 9px; }
+  .viewer-backdrop { padding: 0; }
+  .viewer { width: 100%; max-height: 100vh; height: 100%; border-radius: 0; }
+  .viewer-stage { flex: 1; max-height: none; }
+  .viewer-stage img, .viewer-stage video { max-height: 55vh; }
+  .viewer-footer { padding-bottom: max(13px,env(safe-area-inset-bottom)); }
+  .custom-collections { display: none; }
+}
