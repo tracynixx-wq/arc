@@ -22,8 +22,6 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
-    MenuButtonWebApp,
-    WebAppInfo,
     BufferedInputFile,
 )
 
@@ -39,7 +37,6 @@ SELF_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
 
 LOCK_SECONDS = 30 * 24 * 3600  # Keep the authenticated session for 30 days
 PAGE_SIZE = 10
-WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://arc-zh7i.onrender.com/app/")
 
 SECTIONS = {
     "videos": "🎬 Видео",
@@ -1020,30 +1017,6 @@ async def api_profile(request):
     return web.json_response({"ok": True, "profile": rows[0] if rows else payload})
 
 
-async def api_send_media(request):
-    data = api_auth(request)
-    if not data:
-        return web.json_response({"auth_required": True}, status=401)
-    uid, _ = data
-    row_id = request.match_info["row_id"]
-    if not (row_id.isascii() and row_id.isdecimal()):
-        return await api_json_error("Invalid media id", 400)
-    url = f"{SUPABASE_URL}/rest/v1/media?select=kind,file_id&id=eq.{row_id}&user_id=eq.{uid}"
-    async with session.get(url, headers=_headers()) as r:
-        if r.status >= 300:
-            return await api_json_error("Database error", 500)
-        rows = await r.json()
-    if not rows:
-        return await api_json_error("File not found", 404)
-    item = rows[0]
-    try:
-        await send_media(uid, item["kind"], item["file_id"], None)
-        return web.json_response({"ok": True})
-    except Exception:
-        logging.exception("Could not send media to Telegram chat user=%s row=%s", uid, row_id)
-        return await api_json_error("Не удалось отправить медиа в Telegram", 502)
-
-
 async def api_delete_media(request):
     data = api_auth(request)
     if not data:
@@ -1076,8 +1049,7 @@ async def ask_password(chat_id, uid):
 async def on_start(m: Message):
     await m.answer(
         "ARC готов. Отправляй сюда фото, видео, видеокружки, GIF или документы — "
-        "они сохранятся в архиве. Открой архив кнопкой меню Telegram «Открыть ARC». "
-        "Чтобы отправить файл из архива обратно в чат, используй кнопку «В Telegram» в Mini App."
+        "они сохранятся в архиве. Отдельный сайт архива: https://arc-zh7i.onrender.com"
     )
 
 
@@ -1085,7 +1057,7 @@ async def on_start(m: Message):
 async def on_message(m: Message):
     uid, chat_id = m.from_user.id, m.chat.id
     # The bot is an upload-only endpoint: no password gate here.
-    # Password protection remains enabled for the Mini App API.
+    # Password protection remains enabled for the standalone website API.
     item = extract(m, uid)
     if item:
         section, kind, file_id, unique_id, thumb_file_id, file_name = item
@@ -1106,34 +1078,35 @@ async def on_message(m: Message):
 
 
 # ---------- startup ----------
-async def configure_menu_button():
-    try:
-        await bot.set_chat_menu_button(
-            menu_button=MenuButtonWebApp(
-                text="Открыть ARC",
-                web_app=WebAppInfo(url=WEBAPP_URL),
-            )
-        )
-        logging.info("Telegram Mini App menu button configured")
-    except Exception:
-        logging.exception("Could not configure Telegram Mini App menu button")
-
-
 # ---------- keep-alive web server (Render) ----------
 async def health(_):
-    return web.Response(text="ok")
+    index_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "site", "index.html")
+    try:
+        size = os.path.getsize(index_path)
+    except OSError:
+        size = 0
+    return web.json_response({"ok": bool(size), "website": "standalone", "index_bytes": size},
+                             status=200 if size else 503)
 
 
-async def miniapp_index(_):
-    index_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "miniapp", "index.html")
-    if not os.path.isfile(index_path):
-        logging.error("Mini App index missing: %s", index_path)
-        return web.Response(text="ARC Mini App build is missing", status=503)
-    return web.FileResponse(index_path, headers={"Cache-Control": "no-store"})
+async def site_index(_):
+    index_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "site", "index.html")
+    try:
+        with open(index_path, "rb") as index_file:
+            body = index_file.read()
+    except OSError:
+        logging.exception("Standalone website index unavailable: %s", index_path)
+        return web.Response(text="ARC website build is missing", status=503)
+    if not body:
+        logging.error("Standalone website index is empty: %s", index_path)
+        return web.Response(text="ARC website build is empty", status=503)
+    logging.info("Serving standalone ARC website bytes=%s", len(body))
+    return web.Response(body=body, content_type="text/html", charset="utf-8",
+                        headers={"Cache-Control": "no-store", "X-ARC-Website": "standalone"})
 
 
-async def miniapp_redirect(_):
-    raise web.HTTPFound("/app/")
+async def website_redirect(_):
+    raise web.HTTPFound("/")
 
 
 async def self_ping():
@@ -1159,8 +1132,8 @@ async def main():
     app.router.add_get("/site/", site_index)
     app.router.add_post("/site/login", site_login)
     app.router.add_post("/site/logout", site_logout)
-    app.router.add_get("/app", miniapp_redirect)
-    app.router.add_get("/app/", miniapp_index)
+    app.router.add_get("/app", website_redirect)
+    app.router.add_get("/app/", website_redirect)
     app.router.add_get("/api/me", api_me)
     app.router.add_post("/api/unlock", api_unlock)
     app.router.add_get("/api/summary", api_summary)
@@ -1170,7 +1143,6 @@ async def main():
     app.router.add_post("/api/media/{row_id}/favorite", api_toggle_favorite)
     app.router.add_get("/api/profile", api_profile)
     app.router.add_post("/api/profile", api_profile)
-    app.router.add_post("/api/media/{row_id}/send", api_send_media)
     app.router.add_delete("/api/media/{row_id}", api_delete_media)
     app.router.add_post("/api/mode", api_mode)
     runner = web.AppRunner(app)
@@ -1178,7 +1150,6 @@ async def main():
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     asyncio.create_task(self_ping())
     await bot.delete_webhook(drop_pending_updates=True)
-    await configure_menu_button()
     asyncio.create_task(thumbnail_maintenance_loop())
     await dp.start_polling(bot)
 
