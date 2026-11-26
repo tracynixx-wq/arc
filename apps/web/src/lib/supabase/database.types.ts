@@ -649,12 +649,18 @@ export type Database = {
           attempts: number
           created_at: string
           error: Json | null
+          finished_at: string | null
+          heartbeat_at: string | null
           id: string
+          idempotency_key: string | null
           job_type: string
+          locked_at: string | null
+          locked_by: string | null
           max_attempts: number
           media_id: string | null
           payload: Json
           sequence_no: number
+          started_at: string | null
           status: string
           telegram_chat_id: number | null
           telegram_message_id: number | null
@@ -665,12 +671,18 @@ export type Database = {
           attempts?: number
           created_at?: string
           error?: Json | null
+          finished_at?: string | null
+          heartbeat_at?: string | null
           id?: string
+          idempotency_key?: string | null
           job_type: string
+          locked_at?: string | null
+          locked_by?: string | null
           max_attempts?: number
           media_id?: string | null
           payload?: Json
           sequence_no?: number
+          started_at?: string | null
           status?: string
           telegram_chat_id?: number | null
           telegram_message_id?: number | null
@@ -681,12 +693,18 @@ export type Database = {
           attempts?: number
           created_at?: string
           error?: Json | null
+          finished_at?: string | null
+          heartbeat_at?: string | null
           id?: string
+          idempotency_key?: string | null
           job_type?: string
+          locked_at?: string | null
+          locked_by?: string | null
           max_attempts?: number
           media_id?: string | null
           payload?: Json
           sequence_no?: number
+          started_at?: string | null
           status?: string
           telegram_chat_id?: number | null
           telegram_message_id?: number | null
@@ -708,7 +726,71 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      claim_processing_jobs: {
+        Args: { p_batch_size?: number; p_worker_id: string }
+        Returns: {
+          attempts: number
+          available_at: string
+          created_at: string
+          error: Json | null
+          finished_at: string | null
+          heartbeat_at: string | null
+          id: string
+          idempotency_key: string
+          job_type: string
+          locked_at: string | null
+          locked_by: string | null
+          max_attempts: number
+          media_id: string | null
+          payload: Json
+          priority: number
+          result: Json | null
+          started_at: string | null
+          status: string
+          updated_at: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "processing_jobs"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      claim_telegram_jobs: {
+        Args: { p_batch_size?: number; p_worker_id: string }
+        Returns: {
+          attempts: number
+          created_at: string
+          error: Json | null
+          finished_at: string | null
+          heartbeat_at: string | null
+          id: string
+          idempotency_key: string | null
+          job_type: string
+          locked_at: string | null
+          locked_by: string | null
+          max_attempts: number
+          media_id: string | null
+          payload: Json
+          sequence_no: number
+          started_at: string | null
+          status: string
+          telegram_chat_id: number | null
+          telegram_message_id: number | null
+          telegram_update_id: number | null
+          updated_at: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "telegram_jobs"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      recover_stale_jobs: {
+        Args: { p_stale_after_seconds?: number }
+        Returns: number
+      }
     }
     Enums: {
       [_ in never]: never
