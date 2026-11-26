@@ -59,9 +59,9 @@ thumbnail_tasks: set[asyncio.Task] = set()
 # Small in-process cache prevents repeat downloads of the same Telegram media.
 media_cache = OrderedDict()
 media_cache_bytes = 0
-MEDIA_CACHE_MAX = 48 * 1024 * 1024
+MEDIA_CACHE_MAX = 8 * 1024 * 1024  # Keep archive playback cache below the Render RAM ceiling.
 MEDIA_CACHE_TTL = 600
-media_download_slots = asyncio.Semaphore(4)
+media_download_slots = asyncio.Semaphore(1)  # Avoid concurrent 20 MiB buffers on 512 MiB RAM.
 thumbnail_processing_lock = asyncio.Lock()  # One FFmpeg job at a time on the 512 MiB instance.
 
 
@@ -315,29 +315,22 @@ async def _make_thumbnail_unlocked(uid, file_id, row_id, *, backfill=False):
             logging.warning("animated cover failed row=%s: %s", row_id, reason)
             await db_set_thumbnail_status(row_id, "failed", reason)
             return None
-        source = io.BytesIO()
-        await bot.download_file(
-            tg_file.file_path, source, timeout=90, chunk_size=256 * 1024
-        )
-        media_bytes = source.getvalue()
-        source.close()
-        del source
-        if not media_bytes or len(media_bytes) > 20 * 1024 * 1024:
-            reason = "downloaded source is empty or exceeds the 20 MiB Bot API limit"
-            await db_set_thumbnail_status(row_id, "failed", reason)
-            return None
-
-        import imageio_ffmpeg
-        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-        # MP4 files often keep their index (moov atom) at the end. FFmpeg
-        # cannot reliably seek such files when they are piped through stdin.
-        # A temporary seekable file avoids the partial-file errors seen in Render logs.
+        # Download directly to disk: never keep the entire source video in Python RAM.
         temp_path = None
         try:
             with tempfile.NamedTemporaryFile(prefix="arc-cover-", suffix=".media", delete=False) as tmp:
-                tmp.write(media_bytes)
                 temp_path = tmp.name
-            del media_bytes
+            await bot.download_file(
+                tg_file.file_path, temp_path, timeout=90, chunk_size=256 * 1024
+            )
+            if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:
+                reason = "downloaded source is empty"
+                await db_set_thumbnail_status(row_id, "failed", reason)
+                return None
+
+            import imageio_ffmpeg
+            ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            # FFmpeg reads a seekable disk file; source bytes are never buffered in memory.
             command = [
                 ffmpeg, "-hide_banner", "-loglevel", "error",
                 "-threads", "1", "-filter_threads", "1", "-filter_complex_threads", "1",
@@ -419,7 +412,6 @@ async def generate_and_attach_thumbnail(uid, file_id, unique_id):
 
 async def backfill_missing_thumbnails():
     """Process only pending source-video covers; completed and failed rows are not looped."""
-    await asyncio.sleep(45)
     last_id = 0
     scanned = generated = failed = skipped = 0
     while True:
@@ -1191,7 +1183,7 @@ async def self_ping():
 async def main():
     global session
     timeout = aiohttp.ClientTimeout(total=25, connect=6, sock_read=18)
-    connector = aiohttp.TCPConnector(limit=100, limit_per_host=30, ttl_dns_cache=300, keepalive_timeout=30)
+    connector = aiohttp.TCPConnector(limit=20, limit_per_host=10, ttl_dns_cache=300, keepalive_timeout=30)
     session = aiohttp.ClientSession(timeout=timeout, connector=connector)
     app = web.Application()
     app.router.add_get("/", site_index)
@@ -1217,7 +1209,7 @@ async def main():
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     asyncio.create_task(self_ping())
     await bot.delete_webhook(drop_pending_updates=False)
-    asyncio.create_task(thumbnail_maintenance_loop())
+    # Bulk thumbnail backfill runs on GitHub Actions, not on this 512 MiB service.
     await dp.start_polling(bot)
 
 
