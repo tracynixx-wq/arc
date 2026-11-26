@@ -1,7 +1,12 @@
 import asyncio
 import logging
+import os
 
 import aiohttp
+
+# These settings are required by the bot module but unused by backfill.
+os.environ.setdefault("ADMIN_ID", "0")
+os.environ.setdefault("PASSWORD", "actions-backfill")
 
 import bot as arc
 
