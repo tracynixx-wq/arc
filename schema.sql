@@ -49,7 +49,7 @@ begin
       add constraint media_thumbnail_status_check
       check (thumbnail_status in ('pending','ready','failed','not_required'));
   end if;
-end $;
+end $$;
 
 update media
 set thumbnail_status = case
