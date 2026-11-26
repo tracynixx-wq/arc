@@ -44,11 +44,12 @@ export async function GET(request: Request) {
       .order("uploaded_at", { ascending: false })
       .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
 
+    if (view === "recent") query = query.gte("uploaded_at", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString());
     if (view === "videos") query = query.eq("media_type", "video");
     if (view === "gifs") query = query.eq("media_type", "gif");
     if (view === "photos") query = query.eq("media_type", "photo");
     if (view === "favorites") query = query.in("id", favoriteIds);
-    if (search) query = query.ilike("filename", `%${search}%`);
+    if (search) query = query.or(`filename.ilike.%${search}%,display_name.ilike.%${search}%,description.ilike.%${search}%`);
 
     const { data, error, count } = await query;
     if (error) return NextResponse.json({ error: "Could not load archive media." }, { status: 500 });
