@@ -348,6 +348,16 @@ async def backfill_missing_thumbnails():
                  done, failed, len(rows))
 
 
+async def thumbnail_maintenance_loop():
+    """Retry any missing covers periodically, including uploads that failed once."""
+    while True:
+        try:
+            await backfill_missing_thumbnails()
+        except Exception:
+            logging.exception("thumbnail maintenance pass failed")
+        await asyncio.sleep(6 * 60 * 60)
+
+
 # ---------- helpers ----------
 def is_auth(uid: int) -> bool:
     # Password is required for every account, including the administrator.
@@ -1039,7 +1049,7 @@ async def main():
     asyncio.create_task(self_ping())
     await bot.delete_webhook(drop_pending_updates=True)
     await configure_menu_button()
-    asyncio.create_task(backfill_missing_thumbnails())
+    asyncio.create_task(thumbnail_maintenance_loop())
     await dp.start_polling(bot)
 
 
