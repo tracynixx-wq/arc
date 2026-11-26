@@ -69,6 +69,8 @@ async def db_add(uid, section, kind, file_id, unique_id):
     ) as r:
         if r.status >= 300:
             logging.error("db_add %s %s", r.status, await r.text())
+            return False
+        return True
 
 
 async def db_count(section, uid=None):
@@ -300,8 +302,16 @@ async def on_message(m: Message):
     item = extract(m, uid)
     if item:
         section, kind, file_id, unique_id = item
-        await db_add(uid, section, kind, file_id, unique_id)
-        await refresh_later(chat_id, uid)
+        saved = await db_add(uid, section, kind, file_id, unique_id)
+        if saved:
+            await refresh_later(chat_id, uid)
+            await safe_delete(chat_id, m.message_id)
+        else:
+            await bot.send_message(
+                chat_id,
+                "⚠️ Не удалось сохранить файл. Сообщение оставлено в чате — попробуй позже."
+            )
+        return
     await safe_delete(chat_id, m.message_id)
 
 
