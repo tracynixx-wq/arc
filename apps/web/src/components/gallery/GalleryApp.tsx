@@ -290,6 +290,8 @@ export default function GalleryApp() {
   useEffect(() => {
     if (!active) return;
     const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable=true]")) return;
       if (event.key === "Escape") setActive(null);
       if (event.key === "ArrowLeft" && activeIndex > 0) {
         setViewerFile(null); setViewerLoading(true); setZoom(1); setActive(items[activeIndex - 1]);
