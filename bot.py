@@ -11,6 +11,7 @@ import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import CommandStart
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -471,6 +472,15 @@ async def ask_password(chat_id, uid):
     if uid not in prompt:
         msg = await bot.send_message(chat_id, "🔒 Введи пароль")
         prompt[uid] = msg.message_id
+
+
+@dp.message(CommandStart(), F.chat.type == "private")
+async def on_start(m: Message):
+    await m.answer(
+        "ARC готов. Отправляй сюда фото, видео, видеокружки, GIF или документы — "
+        "они сохранятся в архиве. Открой архив кнопкой меню Telegram «Открыть ARC». "
+        "Чтобы отправить файл из архива обратно в чат, используй кнопку «В Telegram» в Mini App."
+    )
 
 
 @dp.message(F.chat.type == "private")
