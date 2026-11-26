@@ -36,7 +36,7 @@ The script requires HTTPS and does not print the bot token or webhook secret. It
 
 ## Current implementation boundary
 
-The database schema, private media API, Telegram webhook receiver and initial gallery are implemented on the isolated `arc-v1-foundation` branch. A persistent media worker, cover generation, resumable large-file ingestion, archive export, independent backup execution and admin monitoring are still implementation tasks. Do not register the production webhook or point production traffic at this branch until those components and end-to-end tests are complete.
+The isolated `arc-v1-foundation` branch contains the database schema, private media API, responsive gallery, collection/tag editing, Telegram webhook receiver, ingestion worker, GIF cover generation, archive delivery worker and initial admin metrics. The worker code is not yet deployed as a persistent service, and the archive-delivery queue migration must be applied before that feature can run. ZIP export, independent backups, Local Bot API Server hosting, storage threshold alerts and full infrastructure monitoring remain unfinished. Do not register the production webhook or point production traffic at this branch until secrets are provisioned, migrations are applied to the intended staging project, services are deployed, and end-to-end tests pass.
 
 
 ## Telegram archive delivery
