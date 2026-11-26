@@ -656,7 +656,10 @@ async def api_delete_media(request):
     if not data:
         return web.json_response({"auth_required": True}, status=401)
     uid, _ = data
-    ok = await db_delete(uid, request.match_info["row_id"])
+    row_id = request.match_info["row_id"]
+    if not (row_id.isascii() and row_id.isdecimal()):
+        return await api_json_error("Invalid media id", 400)
+    ok = await db_delete(uid, row_id)
     return web.json_response({"ok": ok}, status=200 if ok else 404)
 
 
