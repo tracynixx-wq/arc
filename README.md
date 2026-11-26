@@ -15,7 +15,8 @@ ARC 1.0 foundation. This branch is isolated from `main`; no production service i
 - Gallery: dark Pinterest-style masonry, 10 items per page, newest first.
 - Video playback starts only after an explicit click.
 - Trash is retained until manually emptied.
-- Collections, favorites, tags, search, multi-select and ZIP export.
+- Collections, favorites, tags, search, metadata editing, multi-select and bulk actions.
+- Single-file download and flat browser ZIP export for small selections (up to 40 MiB); background ZIP and automatic multipart export are not yet implemented.
 - Telegram source messages are deleted only after storage verification succeeds.
 - No automatic deletion of originals or backups.
 
