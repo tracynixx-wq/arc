@@ -29,16 +29,14 @@ export async function GET(request: Request) {
     const supabase = createSupabaseAdmin();
     let query = supabase
       .from("media")
-      .select("id,filename,display_name,description,media_type,mime_type,size_bytes,uploaded_at,duration_ms,width,height,processing_status,is_trashed")
+      .select("id,filename,display_name,description,media_type,mime_type,size_bytes,uploaded_at,duration_ms,width,height,processing_status,is_trashed", { count: "exact" })
       .eq("is_trashed", false)
       .order("uploaded_at", { ascending: false })
       .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1);
 
     if (search) query = query.ilike("filename", `%${search}%`);
 
-    const [{ data, error, count },] = await Promise.all([
-      query,
-    ]);
+    const { data, error, count } = await query;
 
     if (error) {
       return NextResponse.json({ error: "Could not load archive media." }, { status: 500 });
