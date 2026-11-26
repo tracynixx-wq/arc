@@ -410,6 +410,7 @@ async def ask_password(chat_id, uid):
         prompt[uid] = msg.message_id
 
 
+@dp.message(F.chat.type == "private")
 async def on_message(m: Message):
     uid, chat_id = m.from_user.id, m.chat.id
     if not is_auth(uid):
