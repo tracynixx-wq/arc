@@ -172,7 +172,7 @@ async def set_original_storage_status(row_id, status, error=None):
 
 async def store_original_media(uid, unique_id, file_id):
     """Save an original in private Supabase Storage before deleting its Telegram message."""
-    lookup = (f"{SUPABASE_URL}/rest/v1/media?select=id,storage_path"
+    lookup = (f"{SUPABASE_URL}/rest/v1/media?select=id,storage_path,kind"
               f"&user_id=eq.{uid}&file_unique_id=eq.{unique_id}&limit=1")
     async with session.get(lookup, headers=_headers()) as response:
         if response.status >= 300:
@@ -206,7 +206,7 @@ async def store_original_media(uid, unique_id, file_id):
         mime = {
             "video": "video/mp4", "video_note": "video/mp4",
             "photo": "image/jpeg", "animation": "video/mp4",
-        }.get((await get_media_kind(row["id"])), "application/octet-stream")
+        }.get(row.get("kind"), "application/octet-stream")
         headers = _headers({"Content-Type": mime, "x-upsert": "true"})
         with open(temp_path, "rb") as source:
             async with session.post(
@@ -236,17 +236,6 @@ async def store_original_media(uid, unique_id, file_id):
                 os.unlink(temp_path)
             except OSError:
                 logging.warning("original temp file cleanup failed")
-
-
-async def get_media_kind(row_id):
-    async with session.get(
-        f"{SUPABASE_URL}/rest/v1/media?select=kind&id=eq.{row_id}",
-        headers=_headers(),
-    ) as response:
-        if response.status >= 300:
-            return ""
-        rows = await response.json()
-        return rows[0].get("kind", "") if rows else ""
 
 
 async def db_set_thumbnail(row_id, thumb_file_id):
