@@ -200,3 +200,17 @@ h1 { margin: 9px 0 7px; font-size: clamp(26px, 3vw, 35px); letter-spacing: -.045
 
 .custom-collection-select { min-width: 0; overflow: hidden; border: 0; padding: 0; background: transparent; color: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; font-size: 10px; }
 .custom-collection-select:hover { color: #d7c9ff; }
+
+
+.heading-meta { display: inline-flex; align-items: center; gap: 12px; }
+.heading-meta button { border: 0; padding: 0; background: transparent; color: #c9b8ff; cursor: pointer; font-size: 10px; }
+.media-card { position: relative; }
+.media-open.selected { outline: 2px solid #a78bfa; outline-offset: -2px; }
+.select-media { position: absolute; top: 9px; right: 9px; z-index: 2; width: 25px; height: 25px; border: 1px solid #ffffff55; border-radius: 7px; background: #08090dcc; color: #eee; cursor: pointer; }
+.select-media.selected { border-color: #b7a3f6; background: #8b5cf6; color: #fff; }
+.bulk-toolbar { position: fixed; left: 50%; bottom: max(18px,env(safe-area-inset-bottom)); z-index: 40; transform: translateX(-50%); width: max-content; max-width: calc(100vw - 28px); display: flex; align-items: center; flex-wrap: wrap; justify-content: center; gap: 8px; padding: 10px 12px; border: 1px solid #48405c; border-radius: 12px; background: #171521f2; box-shadow: 0 12px 50px #0009; }
+.bulk-toolbar strong { padding: 0 7px; color: #e6dcff; font-size: 10px; }
+@media (max-width: 760px) {
+  .bulk-toolbar { width: calc(100vw - 20px); }
+  .bulk-toolbar .secondary-button, .bulk-toolbar .danger-button { flex: 1 1 auto; }
+}
