@@ -183,6 +183,23 @@ async def send_cover_document(uid, document):
                 logging.warning("Telegram cover upload rate limit; retry in %ss", delay)
                 await asyncio.sleep(delay)
 
+async def upload_cover_storage(row_id, gif_bytes):
+    """Store animated covers privately in Supabase Storage, avoiding Telegram send limits."""
+    object_path = f"arc-covers/{int(row_id)}.gif"
+    url = f"{SUPABASE_URL}/storage/v1/object/{object_path}"
+    headers = _headers({
+        "Content-Type": "image/gif",
+        "x-upsert": "true",
+        "Cache-Control": "31536000",
+    })
+    async with session.put(url, data=gif_bytes, headers=headers) as response:
+        if response.status not in (200, 201):
+            logging.error("cover storage upload failed row=%s status=%s body=%s",
+                          row_id, response.status, (await response.text())[:400])
+            return None
+    return f"storage:{object_path}"
+
+
 async def make_thumbnail_from_image(uid, image_file_id, row_id):
     """Turn Telegram's native still thumbnail into a small looping animated GIF."""
     try:
@@ -211,12 +228,9 @@ async def make_thumbnail_from_image(uid, image_file_id, row_id):
         gif_bytes = output.getvalue()
         if not gif_bytes or len(gif_bytes) > 4 * 1024 * 1024:
             return None
-        sent = await send_cover_document(
-            uid, BufferedInputFile(gif_bytes, filename=f"arc-cover-{row_id}.gif")
-        )
-        thumb_id = sent.document.file_id
-        await safe_delete(uid, sent.message_id)
-        logging.info("animated GIF cover generated from native thumbnail row=%s", row_id)
+        thumb_id = await upload_cover_storage(row_id, gif_bytes)
+        if thumb_id:
+            logging.info("animated GIF cover stored from native thumbnail row=%s", row_id)
         return thumb_id
     except Exception:
         logging.exception("native-thumbnail GIF conversion failed row=%s", row_id)
@@ -281,15 +295,9 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
                             row_id, error.decode("utf-8", "ignore")[:300])
             return None
 
-        sent = await send_cover_document(
-            uid, BufferedInputFile(gif_bytes, filename=f"arc-cover-{row_id}.gif")
-        )
-        thumb_id = sent.document.file_id
-        try:
-            await bot.delete_message(uid, sent.message_id)
-        except Exception as exc:
-            logging.warning("temporary animated cover cleanup failed row=%s: %s", row_id, exc)
-        logging.info("animated GIF cover generated row=%s backfill=%s", row_id, backfill)
+        thumb_id = await upload_cover_storage(row_id, gif_bytes)
+        if thumb_id:
+            logging.info("animated GIF cover generated row=%s backfill=%s", row_id, backfill)
         return thumb_id
     except Exception:
         logging.exception("animated GIF cover generation failed row=%s backfill=%s", row_id, backfill)
@@ -859,6 +867,18 @@ async def api_media_cover(request):
     if not thumb_id:
         return await api_json_error("Для этого старого файла обложка не сохранена", 404)
     try:
+        if isinstance(thumb_id, str) and thumb_id.startswith("storage:"):
+            object_path = thumb_id[len("storage:"):]
+            storage_url = f"{SUPABASE_URL}/storage/v1/object/{object_path}"
+            async with session.get(storage_url, headers=_headers()) as storage_response:
+                if storage_response.status >= 300:
+                    logging.error("Stored cover fetch failed row=%s status=%s body=%s",
+                                  row_id, storage_response.status,
+                                  (await storage_response.text())[:300])
+                    return await api_json_error("Не удалось загрузить обложку", 502)
+                body = await storage_response.read()
+            return web.Response(body=body, content_type="image/gif",
+                                headers={"Cache-Control":"private, max-age=3600"})
         tg_file = await bot.get_file(thumb_id, request_timeout=20)
         buffer = io.BytesIO()
         await bot.download_file(tg_file.file_path, buffer, timeout=30)
