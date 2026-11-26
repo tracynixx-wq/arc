@@ -618,6 +618,38 @@ async def api_json_error(message, status=400):
     return web.json_response({"error": message}, status=status)
 
 
+async def site_login(request):
+    """Password login for the standalone ARC website; bind the session to the archive owner."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict) or not isinstance(body.get("password"), str):
+        return await api_json_error("Wrong password", 403)
+    if not hmac.compare_digest(body["password"], PASSWORD):
+        return await api_json_error("Wrong password", 403)
+    response = web.json_response({"ok": True})
+    response.set_cookie(
+        "arc_session", make_session_token(ADMIN_ID), max_age=LOCK_SECONDS,
+        httponly=True, secure=True, samesite="Strict", path="/api"
+    )
+    return response
+
+
+async def site_logout(_):
+    response = web.json_response({"ok": True})
+    response.del_cookie("arc_session", path="/api", secure=True, httponly=True, samesite="Strict")
+    return response
+
+
+async def site_index(_):
+    index_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "site", "index.html")
+    if not os.path.isfile(index_path):
+        logging.error("Standalone site index missing: %s", index_path)
+        return web.Response(text="ARC website build is missing", status=503)
+    return web.FileResponse(index_path, headers={"Cache-Control": "no-store"})
+
+
 async def api_me(request):
     data = api_user(request)
     if not data:
@@ -1079,7 +1111,11 @@ async def main():
     connector = aiohttp.TCPConnector(limit=100, limit_per_host=30, ttl_dns_cache=300, keepalive_timeout=30)
     session = aiohttp.ClientSession(timeout=timeout, connector=connector)
     app = web.Application()
-    app.router.add_get("/", health)
+    app.router.add_get("/", site_index)
+    app.router.add_get("/health", health)
+    app.router.add_get("/site/", site_index)
+    app.router.add_post("/site/login", site_login)
+    app.router.add_post("/site/logout", site_logout)
     app.router.add_get("/app", miniapp_redirect)
     app.router.add_get("/app/", miniapp_index)
     app.router.add_get("/api/me", api_me)
