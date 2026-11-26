@@ -426,6 +426,28 @@ async def api_media_file(request):
         return await api_json_error("Не удалось получить файл из Telegram. Попробуй обновить страницу.", 502)
 
 
+async def api_send_media(request):
+    data = api_auth(request)
+    if not data:
+        return web.json_response({"auth_required": True}, status=401)
+    uid, _ = data
+    row_id = request.match_info["row_id"]
+    url = f"{SUPABASE_URL}/rest/v1/media?select=kind,file_id&id=eq.{row_id}&user_id=eq.{uid}"
+    async with session.get(url, headers=_headers()) as r:
+        if r.status >= 300:
+            return await api_json_error("Database error", 500)
+        rows = await r.json()
+    if not rows:
+        return await api_json_error("File not found", 404)
+    item = rows[0]
+    try:
+        await send_media(uid, item["kind"], item["file_id"], None)
+        return web.json_response({"ok": True})
+    except Exception:
+        logging.exception("Could not send media to Telegram chat user=%s row=%s", uid, row_id)
+        return await api_json_error("Не удалось отправить медиа в Telegram", 502)
+
+
 async def api_delete_media(request):
     data = api_auth(request)
     if not data:
@@ -523,7 +545,7 @@ async def main():
     app.router.add_get("/api/summary", api_summary)
     app.router.add_get("/api/media", api_media)
     app.router.add_get("/api/media/{row_id}/file", api_media_file)
-    app.router.add_delete("/api/media/{row_id}", api_delete_media)
+    app.router.add_post("/api/media/{row_id}/send", api_send_media)\n    app.router.add_delete("/api/media/{row_id}", api_delete_media)
     app.router.add_post("/api/mode", api_mode)
     runner = web.AppRunner(app)
     await runner.setup()
