@@ -885,7 +885,7 @@ async def api_send_all(request):
         return web.json_response({"auth_required": True}, status=401)
     uid, _ = data
     current = send_all_jobs.get(uid)
-    if current and current.get("state") == "running":
+    if current and current.get("state") in ("starting", "running"):
         return web.json_response({"ok": True, "already_running": True, "job": current})
     send_all_jobs[uid] = {"state": "starting", "sent": 0, "failed": 0,
                           "done": 0, "total": 0, "errors": []}
