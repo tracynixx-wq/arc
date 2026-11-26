@@ -1,4 +1,8 @@
 import asyncio
+import hashlib
+import hmac
+import io
+import json
 import logging
 import os
 import time
@@ -12,6 +16,8 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    MenuButtonWebApp,
+    WebAppInfo,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -25,7 +31,8 @@ PORT = int(os.environ.get("PORT", "8080"))
 SELF_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
 
 LOCK_SECONDS = 30 * 24 * 3600  # Keep the authenticated session for 30 days
-PAGE_SIZE = 5
+PAGE_SIZE = 10
+WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://arc-zh7i.onrender.com/app/")
 
 SECTIONS = {
     "videos": "🎬 Видео",
@@ -250,100 +257,194 @@ async def show_section(chat_id, uid, section, page):
     await render_panel(chat_id, uid, view=(section, page, total), force_new=True)
 
 
+# ---------- Telegram Mini App auth and API ----------
+def telegram_user(init_data: str):
+    if not init_data:
+        return None
+    from urllib.parse import parse_qsl
+    try:
+        values = dict(parse_qsl(init_data, keep_blank_values=True))
+        received_hash = values.pop("hash", "")
+        if not received_hash:
+            return None
+        check_string = "\n".join(f"{k}={v}" for k, v in sorted(values.items()))
+        secret = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
+        expected = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, received_hash):
+            return None
+        if int(time.time()) - int(values.get("auth_date", "0")) > 86400:
+            return None
+        user = json.loads(values.get("user", "{}"))
+        return user if user.get("id") else None
+    except Exception:
+        return None
+
+
+def api_user(request):
+    user = telegram_user(request.headers.get("X-Telegram-Init-Data", ""))
+    if not user:
+        return None
+    return int(user["id"]), user
+
+
+def api_auth(request):
+    data = api_user(request)
+    if not data:
+        return None
+    uid, user = data
+    if not is_auth(uid):
+        return None
+    return uid, user
+
+
+async def api_json_error(message, status=400):
+    return web.json_response({"error": message}, status=status)
+
+
+async def api_me(request):
+    data = api_user(request)
+    if not data:
+        return web.json_response({"error": "Invalid Telegram session"}, status=401)
+    uid, user = data
+    return web.json_response({"authorized": is_auth(uid), "user": user})
+
+
+async def api_unlock(request):
+    data = api_user(request)
+    if not data:
+        return await api_json_error("Invalid Telegram session", 401)
+    uid, _ = data
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if body.get("password") != PASSWORD:
+        return await api_json_error("Wrong password", 403)
+    unlocked[uid] = time.time() + LOCK_SECONDS
+    return web.json_response({"ok": True})
+
+
+async def api_summary(request):
+    data = api_auth(request)
+    if not data:
+        return web.json_response({"auth_required": True}, status=401)
+    uid, user = data
+    counts = {key: await db_count(key, uid) for key in SECTIONS}
+    return web.json_response({"counts": counts, "mode": mode.get(uid, "auto"), "user": user})
+
+
+async def api_media(request):
+    data = api_auth(request)
+    if not data:
+        return web.json_response({"auth_required": True}, status=401)
+    uid, _ = data
+    section = request.query.get("section", "")
+    if section not in SECTIONS:
+        return await api_json_error("Unknown section")
+    try:
+        page = max(0, int(request.query.get("page", "0")))
+    except ValueError:
+        page = 0
+    url = (f"{SUPABASE_URL}/rest/v1/media?select=id,kind"
+           f"&user_id=eq.{uid}&section=eq.{section}"
+           f"&order=id.desc&limit=10&offset={page * 10}")
+    async with session.get(url, headers=_headers()) as r:
+        if r.status >= 300:
+            logging.error("api_media list %s %s", r.status, await r.text())
+            return await api_json_error("Database error", 500)
+        items = await r.json()
+    total = await db_count(section, uid)
+    return web.json_response({"items": items, "total": total})
+
+
+async def api_media_file(request):
+    data = api_auth(request)
+    if not data:
+        return web.json_response({"auth_required": True}, status=401)
+    uid, _ = data
+    row_id = request.match_info["row_id"]
+    url = f"{SUPABASE_URL}/rest/v1/media?select=kind,file_id&id=eq.{row_id}&user_id=eq.{uid}"
+    async with session.get(url, headers=_headers()) as r:
+        if r.status >= 300:
+            return await api_json_error("Database error", 500)
+        rows = await r.json()
+    if not rows:
+        return await api_json_error("File not found", 404)
+    try:
+        tg_file = await bot.get_file(rows[0]["file_id"])
+        buffer = io.BytesIO()
+        await bot.download_file(tg_file.file_path, buffer)
+        content_type = {
+            "photo": "image/jpeg", "video": "video/mp4",
+            "video_note": "video/mp4", "animation": "video/mp4"
+        }.get(rows[0]["kind"], "application/octet-stream")
+        return web.Response(body=buffer.getvalue(), content_type=content_type,
+                            headers={"Cache-Control": "private, max-age=300"})
+    except Exception as e:
+        logging.exception("Telegram media download failed: %s", e)
+        return await api_json_error("Telegram file unavailable", 502)
+
+
+async def api_delete_media(request):
+    data = api_auth(request)
+    if not data:
+        return web.json_response({"auth_required": True}, status=401)
+    uid, _ = data
+    ok = await db_delete(uid, request.match_info["row_id"])
+    return web.json_response({"ok": ok}, status=200 if ok else 404)
+
+
+async def api_mode(request):
+    data = api_auth(request)
+    if not data:
+        return web.json_response({"auth_required": True}, status=401)
+    uid, _ = data
+    mode[uid] = "auto" if mode.get(uid) == "leaks" else "leaks"
+    return web.json_response({"mode": mode[uid]})
+
+
 # ---------- handlers ----------
-async def handle_locked(m: Message):
-    uid, chat_id = m.from_user.id, m.chat.id
-    await safe_delete(chat_id, m.message_id)
-    await clear_view(chat_id, uid, drop_panel=True)
-    if m.text and m.text.strip() == PASSWORD:
-        unlocked[uid] = time.time() + LOCK_SECONDS
-        if uid in prompt:
-            await safe_delete(chat_id, prompt.pop(uid))
-        await render_panel(chat_id, uid, force_new=True)
-        return
-    if uid in prompt:
-        try:
-            await bot.edit_message_text(
-                "🔒 Неверный пароль. Введи ещё раз",
-                chat_id=chat_id,
-                message_id=prompt[uid],
-            )
-        except Exception:
-            pass
-    else:
+async def ask_password(chat_id, uid):
+    if uid not in prompt:
         msg = await bot.send_message(chat_id, "🔒 Введи пароль")
         prompt[uid] = msg.message_id
 
 
-@dp.message(F.chat.type == "private")
 async def on_message(m: Message):
     uid, chat_id = m.from_user.id, m.chat.id
     if not is_auth(uid):
-        await handle_locked(m)
-        return
-
-    text = (m.text or "").strip()
-    if text.startswith("/stats") and uid == ADMIN_ID:
         await safe_delete(chat_id, m.message_id)
-        counts = await asyncio.gather(*[db_count(s) for s in SECTIONS])
-        stat = "📊 Всего: " + " · ".join(
-            f"{t} {c}" for t, c in zip(SECTIONS.values(), counts)
-        )
-        msg = await bot.send_message(chat_id, stat)
-        await asyncio.sleep(5)
-        await safe_delete(chat_id, msg.message_id)
-        return
-    if text.startswith("/start"):
-        await safe_delete(chat_id, m.message_id)
-        await clear_view(chat_id, uid)
-        await render_panel(chat_id, uid, force_new=True)
+        if m.text and m.text.strip() == PASSWORD:
+            unlocked[uid] = time.time() + LOCK_SECONDS
+            if uid in prompt:
+                await safe_delete(chat_id, prompt.pop(uid))
+            return
+        await ask_password(chat_id, uid)
         return
 
     item = extract(m, uid)
     if item:
         section, kind, file_id, unique_id = item
         saved = await db_add(uid, section, kind, file_id, unique_id)
-        if saved:
-            await refresh_later(chat_id, uid)
-            await safe_delete(chat_id, m.message_id)
-        else:
-            await bot.send_message(
-                chat_id,
-                "⚠️ Не удалось сохранить файл. Сообщение оставлено в чате — попробуй позже."
-            )
+        if not saved:
+            logging.error("Media save failed for user=%s", uid)
+        await safe_delete(chat_id, m.message_id)
         return
     await safe_delete(chat_id, m.message_id)
 
 
-@dp.callback_query()
-async def on_callback(c: CallbackQuery):
-    uid = c.from_user.id
-    chat_id = c.message.chat.id
-    if not is_auth(uid):
-        await c.answer()
-        if uid not in prompt:
-            msg = await bot.send_message(chat_id, "🔒 Сессия завершена. Введи пароль одним сообщением.")
-            prompt[uid] = msg.message_id
-        return
-    data = c.data or ""
-    await c.answer()
-
-    if data.startswith("v:"):
-        _, section, page = data.split(":")
-        if section in SECTIONS:
-            await show_section(chat_id, uid, section, int(page))
-    elif data == "home":
-        await clear_view(chat_id, uid)
-        await render_panel(chat_id, uid)
-    elif data == "mode":
-        mode[uid] = "auto" if mode.get(uid) == "leaks" else "leaks"
-        await render_panel(chat_id, uid)
-    elif data.startswith("del:"):
-        row_id = int(data.split(":")[1])
-        if await db_delete(uid, row_id):
-            await safe_delete(chat_id, c.message.message_id)
-            if uid in shown and c.message.message_id in shown[uid]:
-                shown[uid].remove(c.message.message_id)
+# ---------- startup ----------
+async def configure_menu_button():
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text="Открыть ARC",
+                web_app=WebAppInfo(url=WEBAPP_URL),
+            )
+        )
+        logging.info("Telegram Mini App menu button configured")
+    except Exception:
+        logging.exception("Could not configure Telegram Mini App menu button")
 
 
 # ---------- keep-alive web server (Render) ----------
@@ -368,11 +469,20 @@ async def main():
     session = aiohttp.ClientSession()
     app = web.Application()
     app.router.add_get("/", health)
+    app.router.add_get("/api/me", api_me)
+    app.router.add_post("/api/unlock", api_unlock)
+    app.router.add_get("/api/summary", api_summary)
+    app.router.add_get("/api/media", api_media)
+    app.router.add_get("/api/media/{row_id}/file", api_media_file)
+    app.router.add_delete("/api/media/{row_id}", api_delete_media)
+    app.router.add_post("/api/mode", api_mode)
+    app.router.add_static("/app", "miniapp", show_index=True)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     asyncio.create_task(self_ping())
     await bot.delete_webhook(drop_pending_updates=True)
+    await configure_menu_button()
     await dp.start_polling(bot)
 
 
