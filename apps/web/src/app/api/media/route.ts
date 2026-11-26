@@ -23,10 +23,30 @@ export async function GET(request: Request) {
   const search = rawSearch.replace(/[^\p{L}\p{N}\s.-]/gu, " ").replace(/\s+/g, " ").trim();
   const rawView = url.searchParams.get("view") ?? "all";
   const view = VIEWS.includes(rawView as (typeof VIEWS)[number]) ? rawView : "all";
+  const collectionId = url.searchParams.get("collection");
+  const tagId = url.searchParams.get("tag");
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if ((collectionId && !UUID.test(collectionId)) || (tagId && !UUID.test(tagId))) return NextResponse.json({ error: "Invalid filter." }, { status: 400 });
 
   try {
     const supabase = createSupabaseAdmin();
     let favoriteIds: string[] = [];
+    let scopedIds: Set<string> | null = null;
+
+    if (collectionId) {
+      const { data: memberships, error: membershipError } = await supabase.from("media_collections").select("media_id").eq("collection_id", collectionId);
+      if (membershipError) return NextResponse.json({ error: "Could not load collection media." }, { status: 500 });
+      scopedIds = new Set((memberships ?? []).map((item) => item.media_id));
+    }
+    if (tagId) {
+      const { data: tagged, error: tagError } = await supabase.from("media_tags").select("media_id").eq("tag_id", tagId);
+      if (tagError) return NextResponse.json({ error: "Could not load tagged media." }, { status: 500 });
+      const tagIds = new Set((tagged ?? []).map((item) => item.media_id));
+      scopedIds = scopedIds ? new Set([...scopedIds].filter((id) => tagIds.has(id))) : tagIds;
+    }
+    if (scopedIds && scopedIds.size === 0) {
+      return NextResponse.json({ items: [], page, pageSize: PAGE_SIZE, hasMore: false, total: 0 });
+    }
 
     if (view === "favorites") {
       const { data: favorites, error: favoriteError } = await supabase.from("favorites").select("media_id");
@@ -50,6 +70,7 @@ export async function GET(request: Request) {
     if (view === "gifs") query = query.eq("media_type", "gif");
     if (view === "photos") query = query.eq("media_type", "photo");
     if (view === "favorites") query = query.in("id", favoriteIds);
+    if (scopedIds) query = query.in("id", [...scopedIds]);
     if (search) query = query.or(`filename.ilike.%${search}%,display_name.ilike.%${search}%,description.ilike.%${search}%`);
 
     const { data, error, count } = await query;
