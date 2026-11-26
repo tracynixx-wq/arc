@@ -24,7 +24,7 @@ SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 PORT = int(os.environ.get("PORT", "8080"))
 SELF_URL = os.environ.get("RENDER_EXTERNAL_URL", "")
 
-LOCK_SECONDS = 3600
+LOCK_SECONDS = 30 * 24 * 3600  # Keep the authenticated session for 30 days
 PAGE_SIZE = 5
 
 SECTIONS = {
@@ -320,7 +320,10 @@ async def on_callback(c: CallbackQuery):
     uid = c.from_user.id
     chat_id = c.message.chat.id
     if not is_auth(uid):
-        await c.answer("🔒 Нужен пароль", show_alert=True)
+        await c.answer()
+        if uid not in prompt:
+            msg = await bot.send_message(chat_id, "🔒 Сессия завершена. Введи пароль одним сообщением.")
+            prompt[uid] = msg.message_id
         return
     data = c.data or ""
     await c.answer()
