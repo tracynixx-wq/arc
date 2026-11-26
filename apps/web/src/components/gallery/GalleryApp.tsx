@@ -503,7 +503,7 @@ export default function GalleryApp() {
         <div className="content">
           <div className="page-heading">
             <div><div className="eyebrow">ЛИЧНЫЙ АРХИВ</div><h1>{currentTitle}</h1><p>Фото, видео и GIF в одном приватном пространстве.</p></div>
-            <div className="heading-meta"><span>Сначала новые</span><button type="button" onClick={() => setSelectionMode((current) => !current)}>{selectionMode ? "Готово" : "Выбрать"}</button></div>
+            <div className="heading-meta"><span>Сначала новые</span>{selectionMode && <button type="button" onClick={() => setSelectedIds((current) => new Set([...current, ...items.map((item) => item.id)]))}>Выбрать страницу</button>}<button type="button" onClick={() => setSelectionMode((current) => !current)}>{selectionMode ? "Готово" : "Выбрать"}</button></div>
           </div>
 
           {status === "loading" && <div className="state-panel"><span className="loader" /><h2>Подключение к архиву</h2><p>Проверяем защищённую сессию.</p></div>}
