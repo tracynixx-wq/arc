@@ -103,3 +103,13 @@ h1 { margin: 9px 0 7px; font-size: clamp(26px, 3vw, 35px); letter-spacing: -.045
   .admin-grid .admin-card { padding: 13px; }
   .admin-grid .admin-card strong { font-size: 19px; }
 }
+
+
+.page-jump { display: inline-flex; align-items: center; gap: 7px; color: #a4a9b5; font-size: 10px; }
+.page-jump input { width: 52px; height: 30px; border: 1px solid var(--line); border-radius: 7px; background: #111319; color: var(--text); text-align: center; font-variant-numeric: tabular-nums; }
+.page-jump span { color: #737987; }
+.admin-link { display: block; padding: 12px 10px 0; color: #8d81b0; font-size: 10px; }
+@media (max-width: 760px) {
+  .pagination { flex-wrap: wrap; gap: 8px; }
+  .page-jump { order: 3; width: 100%; justify-content: center; }
+}
