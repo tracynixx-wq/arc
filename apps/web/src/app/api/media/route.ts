@@ -107,7 +107,7 @@ export async function GET(request: Request) {
       })),
       page,
       pageSize: PAGE_SIZE,
-      hasMore: media.length === PAGE_SIZE,
+      hasMore: count !== null ? page * PAGE_SIZE < count : media.length === PAGE_SIZE,
       total: count ?? null,
     });
     response.headers.set("Cache-Control", "private, no-store");
