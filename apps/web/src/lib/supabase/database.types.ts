@@ -729,6 +729,37 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      arc_admin_overview: { Args: never; Returns: Json }
+      claim_cover_jobs: {
+        Args: { p_batch_size?: number; p_worker_id: string }
+        Returns: {
+          attempts: number
+          available_at: string
+          created_at: string
+          error: Json | null
+          finished_at: string | null
+          heartbeat_at: string | null
+          id: string
+          idempotency_key: string
+          job_type: string
+          locked_at: string | null
+          locked_by: string | null
+          max_attempts: number
+          media_id: string | null
+          payload: Json
+          priority: number
+          result: Json | null
+          started_at: string | null
+          status: string
+          updated_at: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "processing_jobs"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       claim_processing_jobs: {
         Args: { p_batch_size?: number; p_worker_id: string }
         Returns: {
