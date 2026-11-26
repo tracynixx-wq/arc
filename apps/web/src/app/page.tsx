@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 const sections = [
   { label: "Все медиа", count: "—", icon: "▦" },
   { label: "Недавно добавленные", count: "—", icon: "◷" },
@@ -12,10 +14,10 @@ export default function HomePage() {
   return (
     <main className="shell">
       <aside className="sidebar">
-        <a className="brand" href="/" aria-label="ARC home">
+        <Link className="brand" href="/" aria-label="ARC home">
           <span className="brand-mark">A</span>
           <span>ARC</span>
-        </a>
+        </Link>
         <button className="primary-action" type="button" disabled title="Загрузка через Telegram-бота">
           <span>＋</span> Добавить через Telegram
         </button>
