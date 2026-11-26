@@ -222,6 +222,7 @@ export default function GalleryApp() {
           <button className={activeView === "trash" ? "nav-item active" : "nav-item"} type="button" onClick={() => void selectView("trash")}><span className="nav-icon">⌫</span><span>Корзина</span></button>
         </nav>
         <div className="sidebar-bottom"><span className="status-dot" /><span>ARC 1.0 · приватный архив</span></div>
+        <Link className="admin-link" href="/admin">Мониторинг системы ↗</Link>
       </aside>
 
       <section className="workspace">
