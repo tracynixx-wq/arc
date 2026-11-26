@@ -154,7 +154,7 @@ async def db_missing_thumbnails(after_id=0):
         f"{SUPABASE_URL}/rest/v1/media"
         "?select=id,user_id,kind,file_id,thumb_file_id"
         "&kind=in.(video,video_note,animation)"
-        f"&thumb_file_id=is.null&id=gt.{int(after_id)}&order=id.asc&limit=500"
+        ff"&id=gt.{int(after_id)}&order=id.asc&limit=500"
     )
     async with session.get(url, headers=_headers()) as r:
         if r.status >= 300:
