@@ -423,6 +423,19 @@ export default function GalleryApp() {
     setActive(null);
   }
 
+  async function downloadActive() {
+    if (!active) return;
+    try {
+      const response = await fetch("/api/media/" + active.id + "/file?role=original&download=1", { cache: "no-store" });
+      if (!response.ok) throw new Error("Не удалось подготовить скачивание.");
+      const result = await response.json() as { url?: string };
+      if (!result.url) throw new Error("Ссылка на файл не получена.");
+      window.location.assign(result.url);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Ошибка скачивания.");
+    }
+  }
+
   async function permanentlyDelete(item: MediaItem) {
     const confirmed = window.confirm("Удалить оригинал и обложки без возможности восстановления из корзины? Резервные копии, если они есть, сохранятся.");
     if (!confirmed) return;
@@ -527,7 +540,7 @@ export default function GalleryApp() {
           {editing && <div className="viewer-edit"><label>Название<input value={editName} maxLength={240} onChange={(event) => setEditName(event.target.value)} placeholder={active.filename} /></label><label>Описание<textarea value={editDescription} maxLength={10000} onChange={(event) => setEditDescription(event.target.value)} placeholder="Описание файла" /></label><label>Дата создания<input type="date" value={editDate} onChange={(event) => setEditDate(event.target.value)} /></label><div><button className="secondary-button" type="button" disabled={metadataSaving} onClick={() => void saveMetadata()}>{metadataSaving ? "Сохранение…" : "Сохранить изменения"}</button><button className="secondary-button" type="button" onClick={() => setEditing(false)}>Отмена</button></div></div>}
           <div className="viewer-tags"><strong>Теги</strong><div className="tag-list">{tags.map((tag) => <label key={tag.id} className="tag-check"><input type="checkbox" checked={mediaTagIds.includes(tag.id)} onChange={(event) => setMediaTagIds((current) => event.target.checked ? [...current, tag.id] : current.filter((id) => id !== tag.id))} /><span>{tag.name}</span></label>)}</div><div className="tag-create"><input aria-label="Новый тег" value={tagName} maxLength={40} onChange={(event) => setTagName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createTag(); }} placeholder="Создать тег…" /><button className="secondary-button" type="button" onClick={() => void createTag()}>Добавить</button><button className="secondary-button" type="button" disabled={tagsSaving} onClick={() => void saveMediaTags()}>{tagsSaving ? "Сохранение…" : "Сохранить теги"}</button></div></div>
           <div className="viewer-collections"><strong>Коллекции</strong>{collections.length === 0 && <span className="collection-empty">Коллекций пока нет</span>}{collections.map((collection) => <label key={collection.id} className="collection-check"><input type="checkbox" checked={mediaCollectionIds.includes(collection.id)} onChange={(event) => setMediaCollectionIds((current) => event.target.checked ? [...current, collection.id] : current.filter((id) => id !== collection.id))} /><span>{collection.name}</span></label>)}<button className="secondary-button" type="button" disabled={collectionsSaving} onClick={() => void saveMediaCollections()}>{collectionsSaving ? "Сохранение…" : "Сохранить коллекции"}</button></div>
-          <footer className="viewer-footer"><button className="secondary-button" type="button" onClick={() => editing ? setEditing(false) : startEditing()}>{editing ? "Закрыть редактирование" : "Изменить сведения"}</button><a className="secondary-button" href={viewerFile?.url ?? "#"} download={active.filename} aria-disabled={!viewerFile}>Скачать оригинал</a>{activeView !== "trash" && <button className="secondary-button" type="button" onClick={() => void toggleFavorite(active)}>{favoriteIds.has(active.id) ? "Убрать из избранного" : "В избранное"}</button>}{activeView === "trash" ? <><button className="secondary-button" type="button" onClick={() => void restoreItem(active)}>Восстановить</button><button className="danger-button" type="button" onClick={() => void permanentlyDelete(active)}>Удалить навсегда</button></> : <button className="danger-button" type="button" onClick={() => void moveToTrash(active)}>В корзину</button>}</footer>
+          <footer className="viewer-footer"><button className="secondary-button" type="button" onClick={() => editing ? setEditing(false) : startEditing()}>{editing ? "Закрыть редактирование" : "Изменить сведения"}</button><button className="secondary-button" type="button" onClick={() => void downloadActive()}>Скачать оригинал</button>{activeView !== "trash" && <button className="secondary-button" type="button" onClick={() => void toggleFavorite(active)}>{favoriteIds.has(active.id) ? "Убрать из избранного" : "В избранное"}</button>}{activeView === "trash" ? <><button className="secondary-button" type="button" onClick={() => void restoreItem(active)}>Восстановить</button><button className="danger-button" type="button" onClick={() => void permanentlyDelete(active)}>Удалить навсегда</button></> : <button className="danger-button" type="button" onClick={() => void moveToTrash(active)}>В корзину</button>}</footer>
         </section>
       </div>}
       {message && status !== "error" && <div className="toast" role="status">{message}<button type="button" onClick={() => setMessage("")}>×</button></div>}
