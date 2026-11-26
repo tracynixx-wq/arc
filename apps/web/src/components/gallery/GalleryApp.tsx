@@ -75,11 +75,16 @@ export default function GalleryApp() {
   const [mediaTagIds, setMediaTagIds] = useState<string[]>([]);
   const [tagName, setTagName] = useState("");
   const [tagsSaving, setTagsSaving] = useState(false);
+  const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
+  const [activeTagId, setActiveTagId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<"all" | "recent" | "favorites" | "videos" | "gifs" | "photos" | "trash">("all");
   const viewTitles = { all: "Все медиа", recent: "Недавно добавленные", favorites: "Избранное", videos: "Видео", gifs: "GIF", photos: "Фото", trash: "Корзина" };
 
-  const loadPage = useCallback(async (nextPage: number, query: string, view: typeof activeView) => {
-    const response = await fetch(`/api/media?page=${nextPage}&q=${encodeURIComponent(query)}&view=${view}`, { cache: "no-store" });
+  const loadPage = useCallback(async (nextPage: number, query: string, view: typeof activeView, collectionId: string | null = null, tagId: string | null = null) => {
+    const params = new URLSearchParams({ page: String(nextPage), q: query, view });
+    if (collectionId) params.set("collection", collectionId);
+    if (tagId) params.set("tag", tagId);
+    const response = await fetch("/api/media?" + params.toString(), { cache: "no-store" });
     if (response.status === 401) return false;
     if (!response.ok) throw new Error("Не удалось загрузить архив.");
     const result = await response.json() as GalleryResponse;
@@ -128,13 +133,13 @@ export default function GalleryApp() {
   useEffect(() => {
     if (status !== "ready") return;
     const timer = window.setTimeout(() => {
-      void loadPage(1, search, activeView).catch((error: unknown) => {
+      void loadPage(1, search, activeView, activeCollectionId, activeTagId).catch((error: unknown) => {
         setMessage(error instanceof Error ? error.message : "Ошибка поиска.");
         setStatus("error");
       });
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [search, status, loadPage, activeView]);
+  }, [search, status, loadPage, activeView, activeCollectionId, activeTagId]);
 
   useEffect(() => {
     if (!active) return;
@@ -151,12 +156,13 @@ export default function GalleryApp() {
   }, [active]);
 
   const title = useMemo(() => active?.display_name || active?.filename || "", [active]);
+  const currentTitle = activeCollectionId ? (collections.find((item) => item.id === activeCollectionId)?.name ?? "Коллекция") : activeTagId ? ("#" + (tags.find((item) => item.id === activeTagId)?.name ?? "Тег")) : viewTitles[activeView];
 
   async function changePage(nextPage: number) {
     const maxPage = Math.max(1, Math.ceil((total ?? 0) / 10));
     const safePage = Math.max(1, Math.min(maxPage, Math.trunc(nextPage) || 1));
     try {
-      await loadPage(safePage, search, activeView);
+      await loadPage(safePage, search, activeView, activeCollectionId, activeTagId);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Ошибка загрузки страницы.");
     }
@@ -280,11 +286,33 @@ export default function GalleryApp() {
   }, [active]);
 
   async function selectView(view: typeof activeView) {
+    setActiveCollectionId(null);
+    setActiveTagId(null);
     setActiveView(view);
     setSearch("");
     setActive(null);
     try { await loadPage(1, "", view); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Ошибка загрузки раздела."); }
+  }
+
+  async function selectCollection(id: string) {
+    setActiveCollectionId(id);
+    setActiveTagId(null);
+    setActiveView("all");
+    setSearch("");
+    setActive(null);
+    try { await loadPage(1, "", "all", id, null); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Ошибка загрузки коллекции."); }
+  }
+
+  async function selectTag(id: string) {
+    setActiveTagId(id);
+    setActiveCollectionId(null);
+    setActiveView("all");
+    setSearch("");
+    setActive(null);
+    try { await loadPage(1, "", "all", null, id); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Ошибка загрузки тега."); }
   }
 
   function startEditing() {
@@ -394,7 +422,8 @@ export default function GalleryApp() {
           <button className={activeView === "photos" ? "nav-item active" : "nav-item"} type="button" onClick={() => void selectView("photos")}><span className="nav-icon">▧</span><span>Фото</span></button>
           <button className={activeView === "trash" ? "nav-item active" : "nav-item"} type="button" onClick={() => void selectView("trash")}><span className="nav-icon">⌫</span><span>Корзина</span></button>
         </nav>
-        {collections.some((item) => !item.is_system) && <div className="custom-collections"><div className="nav-caption">МОИ КОЛЛЕКЦИИ</div>{collections.filter((item) => !item.is_system).map((item) => <div className="custom-collection-row" key={item.id}><span>{item.name}</span><button type="button" aria-label={"Удалить коллекцию " + item.name} onClick={async () => { if (!window.confirm("Удалить коллекцию «" + item.name + "»? Медиа останутся в архиве.")) return; const response = await fetch("/api/collections?id=" + item.id, { method: "DELETE" }); if (response.ok) setCollections((current) => current.filter((entry) => entry.id !== item.id)); else setMessage("Не удалось удалить коллекцию."); }}>×</button></div>)}</div>}
+        {collections.some((item) => !item.is_system) && <div className="custom-collections"><div className="nav-caption">МОИ КОЛЛЕКЦИИ</div>{collections.filter((item) => !item.is_system).map((item) => <div className="custom-collection-row" key={item.id}><button className="custom-collection-select" type="button" onClick={() => void selectCollection(item.id)}>{item.name}</button><button type="button" aria-label={"Удалить коллекцию " + item.name} onClick={async () => { if (!window.confirm("Удалить коллекцию «" + item.name + "»? Медиа останутся в архиве.")) return; const response = await fetch("/api/collections?id=" + item.id, { method: "DELETE" }); if (response.ok) setCollections((current) => current.filter((entry) => entry.id !== item.id)); else setMessage("Не удалось удалить коллекцию."); }}>×</button></div>)}</div>}
+        {tags.length > 0 && <div className="custom-collections"><div className="nav-caption">ТЕГИ</div>{tags.map((tag) => <div className="custom-collection-row" key={tag.id}><button className="custom-collection-select" type="button" onClick={() => void selectTag(tag.id)}>#{tag.name}</button></div>)}</div>}
         <button className="create-collection" type="button" onClick={() => void createCollection()}>＋ Новая коллекция</button>
         <div className="sidebar-bottom"><span className="status-dot" /><span>ARC 1.0 · приватный архив</span></div>
         <Link className="admin-link" href="/admin">Мониторинг системы ↗</Link>
@@ -402,7 +431,7 @@ export default function GalleryApp() {
 
       <section className="workspace">
         <header className="topbar">
-          <div className="breadcrumbs">Библиотека <span>/</span> {viewTitles[activeView]}</div>
+          <div className="breadcrumbs">Библиотека <span>/</span> {currentTitle}</div>
           <div className="topbar-actions">
             <label className="search"><span>⌕</span><input aria-label="Поиск по архиву" placeholder="Поиск по названию…" value={search} onChange={(event) => setSearch(event.target.value)} /><kbd>⌘ K</kbd></label>
             <button className="avatar" type="button" aria-label="Выйти" onClick={logout}>A</button>
@@ -411,7 +440,7 @@ export default function GalleryApp() {
 
         <div className="content">
           <div className="page-heading">
-            <div><div className="eyebrow">ЛИЧНЫЙ АРХИВ</div><h1>{viewTitles[activeView]}</h1><p>Фото, видео и GIF в одном приватном пространстве.</p></div>
+            <div><div className="eyebrow">ЛИЧНЫЙ АРХИВ</div><h1>{currentTitle}</h1><p>Фото, видео и GIF в одном приватном пространстве.</p></div>
             <div className="heading-meta">Сначала новые <span>⌄</span></div>
           </div>
 
