@@ -245,9 +245,11 @@ async function processIngest(job: TelegramJob) {
     const filenameConflict = Boolean(nameCollision?.length);
 
     const objectKey = `${mediaId}/${originalFilename}`;
-    const { data: priorObject } = await supabase.storage.from("arc-originals").list(mediaId, { search: originalFilename, limit: 5 });
+    const { data: priorObject, error: priorListError } = await supabase.storage.from("arc-originals").list(mediaId, { search: originalFilename, limit: 5 });
+    if (priorListError) throw priorListError;
     if (priorObject?.some((entry) => entry.name === originalFilename)) {
-      await supabase.storage.from("arc-originals").remove([objectKey]);
+      const { error: priorRemoveError } = await supabase.storage.from("arc-originals").remove([objectKey]);
+      if (priorRemoveError) throw priorRemoveError;
     }
 
     await uploadTus(localFile, "arc-originals", objectKey, mimeType);
@@ -421,6 +423,12 @@ async function processCover(job: ProcessingJob) {
     if (versionError) throw versionError;
     const version = (latestCover?.version_number ?? 0) + 1;
     const objectKey = `${job.media_id}/cover-v${version}.gif`;
+    const { data: orphanCover, error: orphanListError } = await supabase.storage.from("arc-covers").list(job.media_id, { search: `cover-v${version}.gif`, limit: 5 });
+    if (orphanListError) throw orphanListError;
+    if (orphanCover?.some((entry) => entry.name === `cover-v${version}.gif`)) {
+      const { error: orphanRemoveError } = await supabase.storage.from("arc-covers").remove([objectKey]);
+      if (orphanRemoveError) throw orphanRemoveError;
+    }
     await uploadTus(outputPath, "arc-covers", objectKey, "image/gif");
     await verifyStorageObject("arc-covers", objectKey);
 
