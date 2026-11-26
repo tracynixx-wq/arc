@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
-import { copyFile, mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, extname, isAbsolute, join } from "node:path";
 import { spawn } from "node:child_process";
@@ -208,22 +208,25 @@ async function processIngest(job: TelegramJob) {
   const fileId = typeof payload.file_id === "string" ? payload.file_id : "";
   if (!fileId) throw new Error("Telegram media job has no file_id.");
 
-  const mediaId = job.id;
   const tempDir = await mkdtemp(join(tmpdir(), "arc-ingest-"));
   const localFile = join(tempDir, "original.bin");
 
   try {
     const downloaded = await downloadTelegramFile(fileId, localFile);
-    const existing = await supabase.from("media")
-      .select("id").eq("sha256", downloaded.sha256).is("purged_at", null).maybeSingle();
+    const existing = await supabase.from("media").select("id")
+      .eq("sha256", downloaded.sha256).is("purged_at", null).maybeSingle();
+    const mediaId = existing.data?.id ?? job.id;
 
     if (existing.data) {
-      const { data: original } = await supabase.from("media_files").select("id")
+      const { data: original } = await supabase.from("media_files").select("storage_bucket,storage_key")
         .eq("media_id", existing.data.id).eq("file_role", "original").eq("is_current", true).maybeSingle();
       if (original) {
-        await markTelegramSuccess(job);
-        await deleteSourceMessage(job.telegram_chat_id, job.telegram_message_id, existing.data.id);
-        return;
+        const { data: signed } = await supabase.storage.from(original.storage_bucket).createSignedUrl(original.storage_key, 60);
+        if (signed?.signedUrl) {
+          await markTelegramSuccess(job);
+          await deleteSourceMessage(job.telegram_chat_id, job.telegram_message_id, existing.data.id);
+          return;
+        }
       }
     }
 
@@ -429,7 +432,7 @@ async function processCover(job: ProcessingJob) {
       storage_bucket: "arc-covers",
       storage_key: objectKey,
       version_number: version,
-      sha256: createHash("sha256").update(await import("node:fs/promises").then((fs) => fs.readFile(outputPath))).digest("hex"),
+      sha256: createHash("sha256").update(await readFile(outputPath)).digest("hex"),
       size_bytes: outputStat.size,
       mime_type: "image/gif",
       is_current: true,
@@ -438,8 +441,6 @@ async function processCover(job: ProcessingJob) {
 
     await supabase.from("media").update({
       processing_status: "ready",
-      width: outputStream.width ?? stream?.width ?? null,
-      height: outputStream.height ?? stream?.height ?? null,
       fps,
     }).eq("id", job.media_id);
 
