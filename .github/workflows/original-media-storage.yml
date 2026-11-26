@@ -44,5 +44,5 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           STORAGE_MODE: ${{ inputs.mode }}
-          MAX_NEW_BYTES: ${{ inputs.max_new_mib * 1024 * 1024 }}
+          MAX_NEW_MIB: ${{ inputs.max_new_mib }}
         run: python original_storage_runner.py
