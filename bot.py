@@ -454,6 +454,18 @@ async def health(_):
     return web.Response(text="ok")
 
 
+async def miniapp_index(_):
+    index_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "miniapp", "index.html")
+    if not os.path.isfile(index_path):
+        logging.error("Mini App index missing: %s", index_path)
+        return web.Response(text="ARC Mini App build is missing", status=503)
+    return web.FileResponse(index_path, headers={"Cache-Control": "no-store"})
+
+
+async def miniapp_redirect(_):
+    raise web.HTTPFound("/app/")
+
+
 async def self_ping():
     if not SELF_URL:
         return
@@ -471,6 +483,8 @@ async def main():
     session = aiohttp.ClientSession()
     app = web.Application()
     app.router.add_get("/", health)
+    app.router.add_get("/app", miniapp_redirect)
+    app.router.add_get("/app/", miniapp_index)
     app.router.add_get("/api/me", api_me)
     app.router.add_post("/api/unlock", api_unlock)
     app.router.add_get("/api/summary", api_summary)
@@ -478,7 +492,6 @@ async def main():
     app.router.add_get("/api/media/{row_id}/file", api_media_file)
     app.router.add_delete("/api/media/{row_id}", api_delete_media)
     app.router.add_post("/api/mode", api_mode)
-    app.router.add_static("/app", "miniapp", show_index=True)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
