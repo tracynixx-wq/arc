@@ -72,3 +72,34 @@ h1 { margin: 9px 0 7px; font-size: clamp(26px, 3vw, 35px); letter-spacing: -.045
   .heading-meta { font-size: 9px; }
   .empty-state { min-height: 390px; }
 }
+
+
+.admin-shell { min-height: 100vh; background: var(--bg); color: var(--text); }
+.admin-header { height: 66px; padding: 0 34px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: #0e1015; }
+.admin-brand { font-size: 15px; font-weight: 750; letter-spacing: .12em; }
+.admin-brand span { color: var(--muted); font-size: 11px; font-weight: 450; letter-spacing: 0; }
+.admin-back { color: #b7a5ed; font-size: 11px; }
+.admin-content { max-width: 1200px; margin: 0 auto; padding: 42px 28px; }
+.admin-content h1 { margin-bottom: 6px; }
+.admin-subtitle { margin: 0 0 26px; color: var(--muted); font-size: 12px; }
+.admin-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+.admin-card { padding: 17px; border: 1px solid var(--line); border-radius: 12px; background: #11141b; }
+.admin-grid .admin-card { display: grid; gap: 12px; }
+.admin-grid .admin-card span { color: var(--muted); font-size: 10px; }
+.admin-grid .admin-card strong { font-size: 23px; font-weight: 650; letter-spacing: -.03em; }
+.admin-queues { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin-top: 12px; }
+.admin-card h2 { margin: 0 0 13px; font-size: 12px; font-weight: 650; }
+.admin-row { min-height: 30px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #252a34; color: #aeb4c0; font-size: 10px; }
+.admin-row strong { color: #e6e7ed; font-variant-numeric: tabular-nums; }
+.admin-muted { color: #7d8492; font-size: 10px; }
+.admin-storage { margin-top: 12px; }
+.admin-sampled { margin-top: 17px; }
+.admin-error { margin: 15px 0; padding: 12px; border: 1px solid #673c49; border-radius: 8px; background: #25171d; color: #ffc2ce; font-size: 11px; }
+@media (max-width: 700px) {
+  .admin-header { padding: 0 17px; }
+  .admin-content { padding: 30px 16px; }
+  .admin-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+  .admin-queues { grid-template-columns: 1fr; gap: 8px; }
+  .admin-grid .admin-card { padding: 13px; }
+  .admin-grid .admin-card strong { font-size: 19px; }
+}
