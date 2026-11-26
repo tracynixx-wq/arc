@@ -196,3 +196,7 @@ h1 { margin: 9px 0 7px; font-size: clamp(26px, 3vw, 35px); letter-spacing: -.045
 .tag-check input { accent-color: #a78bfa; }
 .tag-create { display: flex; flex-wrap: wrap; gap: 7px; }
 .tag-create input { min-width: 120px; flex: 1; height: 32px; border: 1px solid #343947; border-radius: 8px; background: #171a22; color: var(--text); padding: 0 9px; font-size: 10px; }
+
+
+.custom-collection-select { min-width: 0; overflow: hidden; border: 0; padding: 0; background: transparent; color: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; font-size: 10px; }
+.custom-collection-select:hover { color: #d7c9ff; }
