@@ -175,6 +175,17 @@ export default function GalleryApp() {
     setActive(null);
   }
 
+  async function permanentlyDelete(item: MediaItem) {
+    const confirmed = window.confirm("Удалить оригинал и обложки без возможности восстановления из корзины? Резервные копии, если они есть, сохранятся.");
+    if (!confirmed) return;
+    const response = await fetch(`/api/media/${item.id}/purge`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirm: true }),
+    });
+    if (!response.ok) { setMessage("Не удалось завершить удаление. Можно повторить попытку."); return; }
+    setItems((current) => current.filter((entry) => entry.id !== item.id));
+    setActive(null);
+  }
+
   async function restoreItem(item: MediaItem) {
     const response = await fetch(`/api/media/${item.id}/restore`, { method: "POST" });
     if (!response.ok) { setMessage("Не удалось восстановить файл."); return; }
@@ -256,7 +267,7 @@ export default function GalleryApp() {
             {!viewerLoading && viewerFile && active.media_type !== "video" && <Image src={viewerFile.url} alt={title} width={1600} height={1200} unoptimized style={{ width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />}
             {!viewerLoading && !viewerFile && <p>Не удалось загрузить оригинал.</p>}
           </div>
-          <footer className="viewer-footer"><a className="secondary-button" href={viewerFile?.url ?? "#"} download={active.filename} aria-disabled={!viewerFile}>Скачать оригинал</a><button className="secondary-button" type="button" onClick={() => void toggleFavorite(active)}>{favoriteIds.has(active.id) ? "Убрать из избранного" : "В избранное"}</button>{activeView === "trash" ? <button className="secondary-button" type="button" onClick={() => void restoreItem(active)}>Восстановить</button> : <button className="danger-button" type="button" onClick={() => void moveToTrash(active)}>В корзину</button>}</footer>
+          <footer className="viewer-footer"><a className="secondary-button" href={viewerFile?.url ?? "#"} download={active.filename} aria-disabled={!viewerFile}>Скачать оригинал</a><button className="secondary-button" type="button" onClick={() => void toggleFavorite(active)}>{favoriteIds.has(active.id) ? "Убрать из избранного" : "В избранное"}</button>{activeView === "trash" ? <><button className="secondary-button" type="button" onClick={() => void restoreItem(active)}>Восстановить</button><button className="danger-button" type="button" onClick={() => void permanentlyDelete(active)}>Удалить навсегда</button></> : <button className="danger-button" type="button" onClick={() => void moveToTrash(active)}>В корзину</button>}</footer>
         </section>
       </div>}
       {message && status !== "error" && <div className="toast" role="status">{message}<button type="button" onClick={() => setMessage("")}>×</button></div>}
