@@ -353,7 +353,9 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
             except asyncio.TimeoutError:
                 proc.kill()
                 await proc.communicate()
+                reason = "FFmpeg conversion timed out after 45 seconds"
                 logging.warning("animated cover ffmpeg timeout row=%s", row_id)
+                await db_set_thumbnail_status(row_id, "failed", reason)
                 return None
         finally:
             if temp_path:
