@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { zipSync } from "fflate";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type MediaItem = {
@@ -55,6 +56,7 @@ export default function GalleryApp() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectionMode, setSelectionMode] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [zipBusy, setZipBusy] = useState(false);
   const requestVersion = useRef(0);
   const [page, setPage] = useState(1);
   const [pageInput, setPageInput] = useState("1");
@@ -369,6 +371,65 @@ export default function GalleryApp() {
     });
   }
 
+  async function downloadZip() {
+    if (!selectedIds.size) return;
+    setZipBusy(true);
+    try {
+      const ids = [...selectedIds];
+      const sources: Array<{ id: string; filename: string; sizeBytes: number; url: string }> = [];
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const response = await fetch("/api/media/bulk/zip-sources", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ids: ids.slice(offset, offset + 100) }),
+        });
+        const result = await response.json() as { files?: Array<{ id: string; filename: string; sizeBytes: number; url: string }>; error?: string };
+        if (!response.ok || !result.files) throw new Error(result.error ?? "Не удалось подготовить ZIP.");
+        sources.push(...result.files);
+      }
+
+      const totalBytes = sources.reduce((sum, file) => sum + file.sizeBytes, 0);
+      const browserLimit = 40 * 1024 * 1024;
+      if (totalBytes > browserLimit) {
+        throw new Error("Выбранный архив слишком велик для безопасной сборки в браузере. Фоновый ZIP-экспорт ещё не подключён.");
+      }
+
+      const entries: Record<string, Uint8Array> = {};
+      const usedNames = new Set<string>();
+      for (const source of sources) {
+        const response = await fetch(source.url, { cache: "no-store" });
+        if (!response.ok) throw new Error("Не удалось скачать файл «" + source.filename + "» для ZIP.");
+        const data = new Uint8Array(await response.arrayBuffer());
+        const dot = source.filename.lastIndexOf(".");
+        const base = dot > 0 ? source.filename.slice(0, dot) : source.filename;
+        const extension = dot > 0 ? source.filename.slice(dot) : "";
+        let name = source.filename;
+        let suffix = 2;
+        while (usedNames.has(name.toLocaleLowerCase())) {
+          name = base + " (" + suffix + ")" + extension;
+          suffix += 1;
+        }
+        usedNames.add(name.toLocaleLowerCase());
+        entries[name] = data;
+      }
+
+      const archive = zipSync(entries, { level: 0 });
+      const blob = new Blob([archive], { type: "application/zip" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "ARC-export-" + new Date().toISOString().slice(0, 10) + ".zip";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      setMessage("ZIP-архив подготовлен: " + sources.length + " файлов.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Ошибка ZIP-экспорта.");
+    } finally {
+      setZipBusy(false);
+    }
+  }
+
   async function runBulkAction(action: "trash" | "restore" | "favorite" | "unfavorite") {
     if (!selectedIds.size) return;
     setBulkBusy(true);
@@ -526,7 +587,7 @@ export default function GalleryApp() {
         </div>
       </section>
 
-      {selectedIds.size > 0 && <div className="bulk-toolbar"><strong>Выбрано: {selectedIds.size}</strong><button className="secondary-button" type="button" disabled={bulkBusy} onClick={() => void runBulkAction(activeView === "trash" ? "restore" : "favorite")}>{activeView === "trash" ? "Восстановить" : "В избранное"}</button>{activeView === "favorites" && <button className="secondary-button" type="button" disabled={bulkBusy} onClick={() => void runBulkAction("unfavorite")}>Убрать из избранного</button>}{activeView !== "trash" && <button className="danger-button" type="button" disabled={bulkBusy} onClick={() => void runBulkAction("trash")}>В корзину</button>}<button className="secondary-button" type="button" disabled={bulkBusy} onClick={() => setSelectedIds(new Set())}>Снять выбор</button></div>}
+      {selectedIds.size > 0 && <div className="bulk-toolbar"><strong>Выбрано: {selectedIds.size}</strong><button className="secondary-button" type="button" disabled={zipBusy || bulkBusy} onClick={() => void downloadZip()}>{zipBusy ? "Сборка ZIP…" : "Скачать ZIP"}</button><button className="secondary-button" type="button" disabled={bulkBusy} onClick={() => void runBulkAction(activeView === "trash" ? "restore" : "favorite")}>{activeView === "trash" ? "Восстановить" : "В избранное"}</button>{activeView === "favorites" && <button className="secondary-button" type="button" disabled={bulkBusy} onClick={() => void runBulkAction("unfavorite")}>Убрать из избранного</button>}{activeView !== "trash" && <button className="danger-button" type="button" disabled={bulkBusy} onClick={() => void runBulkAction("trash")}>В корзину</button>}<button className="secondary-button" type="button" disabled={bulkBusy} onClick={() => setSelectedIds(new Set())}>Снять выбор</button></div>}
       {active && <div className="viewer-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setActive(null); }}>
         <section className="viewer" role="dialog" aria-modal="true" aria-label="Просмотр медиа">
           <header className="viewer-header"><div><strong>{title}</strong><small>{formatSize(active.size_bytes)} · {formatDate(active.uploaded_at)}</small></div><button className="viewer-close" type="button" onClick={() => setActive(null)} aria-label="Закрыть">×</button></header>
