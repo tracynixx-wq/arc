@@ -82,6 +82,9 @@ async def db_add(uid, section, kind, file_id, unique_id, thumb_file_id=None, fil
             "file_id": file_id,
             "file_unique_id": unique_id,
             "thumb_file_id": thumb_file_id,
+            "thumbnail_status": "pending" if kind in ("video", "video_note", "animation") else "not_required",
+            "thumbnail_error": None,
+            "thumbnail_updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "file_name": (file_name or f"{kind}-{unique_id[:10]}")[:180],
         },
         headers=_headers(
@@ -135,22 +138,84 @@ async def db_delete(uid, row_id):
 
 async def db_set_thumbnail(row_id, thumb_file_id):
     url = f"{SUPABASE_URL}/rest/v1/media?id=eq.{row_id}"
+    payload = {
+        "thumb_file_id": thumb_file_id,
+        "thumbnail_status": "ready",
+        "thumbnail_error": None,
+        "thumbnail_updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
     async with session.patch(
-        url, json={"thumb_file_id": thumb_file_id},
-        headers=_headers({"Prefer": "return=minimal"}),
+        url, json=payload,
+        headers=_headers({"Prefer": "return=representation"}),
     ) as r:
         if r.status >= 300:
             logging.error("thumbnail save failed row=%s status=%s body=%s",
                           row_id, r.status, await r.text())
             return False
+        try:
+            rows = await r.json()
+        except Exception:
+            rows = []
+        if not rows:
+            logging.error("thumbnail save updated zero rows row=%s", row_id)
+            return False
         return True
+
+
+async def db_set_thumbnail_status(row_id, status, error=None):
+    if status not in ("pending", "ready", "failed", "not_required"):
+        raise ValueError(f"Invalid thumbnail status: {status}")
+    url = f"{SUPABASE_URL}/rest/v1/media?id=eq.{row_id}"
+    payload = {
+        "thumbnail_status": status,
+        "thumbnail_error": (str(error)[:500] if error else None),
+        "thumbnail_updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    async with session.patch(
+        url, json=payload,
+        headers=_headers({"Prefer": "return=representation"}),
+    ) as r:
+        if r.status >= 300:
+            logging.error("thumbnail status save failed row=%s status=%s body=%s",
+                          row_id, r.status, await r.text())
+            return False
+        try:
+            rows = await r.json()
+        except Exception:
+            rows = []
+        if not rows:
+            logging.error("thumbnail status update affected zero rows row=%s", row_id)
+            return False
+        return True
+
+
+async def db_thumbnail_status_counts():
+    counts = {}
+    for status in ("pending", "ready", "failed"):
+        url = (
+            f"{SUPABASE_URL}/rest/v1/media?select=id&kind=in.(video,video_note,animation)"
+            f"&thumbnail_status=eq.{status}&limit=1"
+        )
+        async with session.get(url, headers=_headers({"Prefer": "count=exact"})) as r:
+            if r.status >= 300:
+                logging.error("thumbnail count failed status=%s code=%s body=%s",
+                              status, r.status, await r.text())
+                counts[status] = -1
+                continue
+            content_range = r.headers.get("Content-Range", "*/0")
+            try:
+                counts[status] = int(content_range.rsplit("/", 1)[-1])
+            except (TypeError, ValueError):
+                counts[status] = -1
+    return counts
 
 
 async def db_missing_thumbnails(after_id=0):
     url = (
         f"{SUPABASE_URL}/rest/v1/media"
-        "?select=id,user_id,kind,file_id,thumb_file_id"
+        "?select=id,user_id,kind,file_id,thumb_file_id,thumbnail_status"
         "&kind=in.(video,video_note,animation)"
+        "&thumbnail_status=eq.pending"
         f"&id=gt.{int(after_id)}&order=id.asc&limit=500"
     )
     async with session.get(url, headers=_headers()) as r:
@@ -192,7 +257,7 @@ async def upload_cover_storage(row_id, gif_bytes):
         "x-upsert": "true",
         "Cache-Control": "31536000",
     })
-    async with session.put(url, data=gif_bytes, headers=headers) as response:
+    async with session.post(url, data=gif_bytes, headers=headers) as response:
         if response.status not in (200, 201):
             logging.error("cover storage upload failed row=%s status=%s body=%s",
                           row_id, response.status, (await response.text())[:400])
@@ -238,12 +303,16 @@ async def make_thumbnail_from_image(uid, image_file_id, row_id):
 
 
 async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
-    """Create a short looping animated GIF cover and store its Telegram file_id."""
+    """Create a short looping GIF from the actual source video and store it in Supabase."""
     try:
         tg_file = await bot.get_file(file_id, request_timeout=30)
         if tg_file.file_size and tg_file.file_size > 20 * 1024 * 1024:
-            logging.warning("animated cover skipped row=%s: Telegram download limit exceeded (%s bytes)",
-                            row_id, tg_file.file_size)
+            reason = (
+                f"source video is {tg_file.file_size} bytes; standard Telegram Bot API "
+                "download limit is 20 MiB, so a genuine video cover cannot be generated"
+            )
+            logging.warning("animated cover failed row=%s: %s", row_id, reason)
+            await db_set_thumbnail_status(row_id, "failed", reason)
             return None
         source = io.BytesIO()
         await bot.download_file(
@@ -251,6 +320,8 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
         )
         media_bytes = source.getvalue()
         if not media_bytes or len(media_bytes) > 20 * 1024 * 1024:
+            reason = "downloaded source is empty or exceeds the 20 MiB Bot API limit"
+            await db_set_thumbnail_status(row_id, "failed", reason)
             return None
 
         import imageio_ffmpeg
@@ -291,16 +362,21 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
                 except OSError:
                     logging.warning("temporary cover input cleanup failed row=%s", row_id)
         if proc.returncode != 0 or not gif_bytes or len(gif_bytes) > 8 * 1024 * 1024:
-            logging.warning("animated cover conversion failed row=%s: %s",
-                            row_id, error.decode("utf-8", "ignore")[:300])
+            reason = error.decode("utf-8", "ignore")[:450] or "FFmpeg produced no GIF or GIF exceeded 8 MiB"
+            logging.warning("animated cover conversion failed row=%s: %s", row_id, reason)
+            await db_set_thumbnail_status(row_id, "failed", reason)
             return None
 
         thumb_id = await upload_cover_storage(row_id, gif_bytes)
         if thumb_id:
             logging.info("animated GIF cover generated row=%s backfill=%s", row_id, backfill)
         return thumb_id
-    except Exception:
+    except Exception as exc:
         logging.exception("animated GIF cover generation failed row=%s backfill=%s", row_id, backfill)
+        message = str(exc).strip() or exc.__class__.__name__
+        if "file is too big" in message.lower():
+            message = "Telegram Bot API cannot download this source file because it exceeds its download limit"
+        await db_set_thumbnail_status(row_id, "failed", message)
         return None
 
 async def generate_and_attach_thumbnail(uid, file_id, unique_id):
@@ -316,63 +392,76 @@ async def generate_and_attach_thumbnail(uid, file_id, unique_id):
         row = rows[0]
         row_id = row["id"]
         thumb_id = await make_thumbnail(uid, file_id, row_id)
-        if not thumb_id and row.get("thumb_file_id"):
-            thumb_id = await make_thumbnail_from_image(
-                uid, row["thumb_file_id"], row_id
-            )
         if thumb_id:
-            await db_set_thumbnail(row_id, thumb_id)
+            if not await db_set_thumbnail(row_id, thumb_id):
+                await db_set_thumbnail_status(row_id, "failed", "GIF uploaded but database row was not updated")
         else:
-            logging.warning("Cover remains pending; will retry in maintenance pass row=%s", row_id)
+            await db_set_thumbnail_status(row_id, "failed", "GIF generation failed; see server log for details")
+            logging.warning("Cover generation failed row=%s; status set to failed", row_id)
     except Exception:
         logging.exception("async thumbnail attach failed unique_id=%s", unique_id)
 
 
 async def backfill_missing_thumbnails():
-    """Upgrade every video-like media cover to an animated GIF using keyset pagination."""
-    # Wait until Render's rolling deployment has stopped the previous instance.
+    """Process only pending source-video covers; completed and failed rows are not looped."""
     await asyncio.sleep(45)
     last_id = 0
-    total = done = failed = 0
+    scanned = generated = failed = skipped = 0
     while True:
         rows = await db_missing_thumbnails(last_id)
         if not rows:
             break
         for row in rows:
             last_id = int(row["id"])
+            scanned += 1
             existing = row.get("thumb_file_id")
+
+            # Supabase Storage markers are not Telegram file_ids. Never send them to get_file().
+            if isinstance(existing, str) and existing.startswith("storage:"):
+                await db_set_thumbnail(row["id"], existing)
+                skipped += 1
+                continue
+
+            # A legacy Telegram GIF is already a valid animated cover.
             if existing:
                 try:
                     old_thumb = await bot.get_file(existing, request_timeout=15)
                     if (old_thumb.file_path or "").lower().endswith(".gif"):
+                        await db_set_thumbnail_status(row["id"], "ready")
+                        skipped += 1
                         continue
                 except Exception:
-                    logging.warning("Existing cover unreadable row=%s; replacing", row["id"])
-            total += 1
+                    logging.info("Legacy cover unreadable row=%s; regenerating from source video",
+                                 row["id"])
+
             thumb_id = await make_thumbnail(
                 int(row["user_id"]), row["file_id"], row["id"], backfill=True
             )
-            if not thumb_id and row.get("thumb_file_id"):
-                thumb_id = await make_thumbnail_from_image(
-                    int(row["user_id"]), row["thumb_file_id"], row["id"]
-                )
             if thumb_id and await db_set_thumbnail(row["id"], thumb_id):
-                done += 1
+                generated += 1
             else:
                 failed += 1
-                logging.warning(
-                    "Cover still missing row=%s kind=%s; retrying next maintenance pass",
-                    row["id"], row["kind"]
+                await db_set_thumbnail_status(
+                    row["id"], "failed",
+                    "Generation or database save failed; inspect Render logs for the detailed cause"
                 )
-            if total % 10 == 0:
+
+            if scanned % 10 == 0:
+                counts = await db_thumbnail_status_counts()
                 logging.info(
-                    "Thumbnail backfill progress: %s generated=%s failed=%s",
-                    total, done, failed
+                    "Thumbnail backfill progress: scanned=%s generated=%s failed=%s skipped=%s "
+                    "pending=%s ready=%s total_failed=%s",
+                    scanned, generated, failed, skipped,
+                    counts.get("pending"), counts.get("ready"), counts.get("failed")
                 )
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
+
+    counts = await db_thumbnail_status_counts()
     logging.info(
-        "Thumbnail backfill finished: generated=%s failed=%s total=%s",
-        done, failed, total
+        "Thumbnail backfill finished: scanned=%s generated=%s failed_this_pass=%s skipped=%s "
+        "pending=%s ready=%s total_failed=%s",
+        scanned, generated, failed, skipped,
+        counts.get("pending"), counts.get("ready"), counts.get("failed")
     )
 
 
