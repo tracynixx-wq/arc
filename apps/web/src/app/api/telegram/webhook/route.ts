@@ -149,7 +149,7 @@ export async function POST(request: Request) {
           await sendTelegramMessage(token, message.chat.id, "Отправка архива уже стоит в очереди или выполняется.");
         } else {
           const { data: queued, error } = await supabase.from("telegram_jobs").insert({
-            job_type: "send_archive", telegram_chat_id: message.chat.id,
+            job_type: "send_archive", telegram_update_id: update.update_id, telegram_chat_id: message.chat.id,
             payload: { requested_by: message.from.id, delivery_mode: "ask" },
           }).select("id").single();
           if (error || !queued) throw new Error("Could not enqueue archive delivery");
