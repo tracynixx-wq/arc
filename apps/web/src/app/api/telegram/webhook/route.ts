@@ -20,7 +20,8 @@ type TelegramMessage = {
   document?: TelegramFile;
   text?: string;
 };
-type TelegramUpdate = { update_id: number; message?: TelegramMessage };
+type TelegramCallbackQuery = { id: string; from: TelegramUser; message?: TelegramMessage; data?: string };
+type TelegramUpdate = { update_id: number; message?: TelegramMessage; callback_query?: TelegramCallbackQuery };
 
 async function sendTelegramMessage(token: string, chatId: number, text: string, replyMarkup?: Record<string, unknown>) {
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -29,7 +30,8 @@ async function sendTelegramMessage(token: string, chatId: number, text: string, 
     body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) }),
     cache: "no-store",
   });
-  if (!response.ok) throw new Error("Telegram sendMessage failed");
+  const result = await response.json() as { ok?: boolean };
+  if (!response.ok || !result.ok) throw new Error("Telegram sendMessage failed");
 }
 
 function mediaPayload(message: TelegramMessage) {
@@ -73,14 +75,43 @@ export async function POST(request: Request) {
   }
 
   const message = update.message;
-  if (!Number.isSafeInteger(update.update_id) || !message || !message.from ||
-      String(message.from.id) !== ownerId || message.chat.type !== "private" ||
-      message.chat.id !== message.from.id) {
+  const callback = update.callback_query;
+  const actor = callback?.from ?? message?.from;
+  const chat = callback?.message?.chat ?? message?.chat;
+  if (!Number.isSafeInteger(update.update_id) || !actor || !chat ||
+      String(actor.id) !== ownerId || chat.type !== "private" || chat.id !== actor.id) {
     return NextResponse.json({ ok: true });
   }
 
-  const text = message.text?.trim() ?? "";
   const supabase = createSupabaseAdmin();
+
+  if (callback) {
+    const match = /^arc_send_(native|document):([0-9a-f-]{36})$/i.exec(callback.data ?? "");
+    let answerText = "Кнопка больше не активна.";
+    if (match) {
+      const mode = match[1] as "native" | "document";
+      const jobId = match[2];
+      const { data: job } = await supabase.from("telegram_jobs").select("payload")
+        .eq("id", jobId).eq("job_type", "send_archive").eq("status", "queued").maybeSingle();
+      if (job?.payload && typeof job.payload === "object" && (job.payload as Record<string, unknown>).delivery_mode === "ask") {
+        const payload = { ...(job.payload as Record<string, unknown>), delivery_mode: mode };
+        const { data: selected } = await supabase.from("telegram_jobs").update({ payload })
+          .eq("id", jobId).eq("status", "queued").filter("payload->>delivery_mode", "eq", "ask").select("id").maybeSingle();
+        if (selected) answerText = mode === "native" ? "Будет отправлен исходный тип каждого файла." : "Все файлы будут отправлены как документы.";
+      }
+    }
+    await fetch("https://api.telegram.org/bot" + token + "/answerCallbackQuery", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ callback_query_id: callback.id, text: answerText }), cache: "no-store",
+    });
+    if (match && answerText !== "Кнопка больше не активна.") {
+      await sendTelegramMessage(token, chat.id, answerText + " Отправка начнётся автоматически.");
+    }
+    return NextResponse.json({ ok: true });
+  }
+
+  if (!message) return NextResponse.json({ ok: true });
+  const text = message.text?.trim() ?? "";
 
   if (text.startsWith("/")) {
     const command = text.split(/\s+/)[0].split("@")[0].toLowerCase();
@@ -117,16 +148,21 @@ export async function POST(request: Request) {
         if (active?.length) {
           await sendTelegramMessage(token, message.chat.id, "Отправка архива уже стоит в очереди или выполняется.");
         } else {
-          const { error } = await supabase.from("telegram_jobs").insert({
+          const { data: queued, error } = await supabase.from("telegram_jobs").insert({
             job_type: "send_archive", telegram_chat_id: message.chat.id,
             payload: { requested_by: message.from.id, delivery_mode: "ask" },
+          }).select("id").single();
+          if (error || !queued) throw new Error("Could not enqueue archive delivery");
+          await sendTelegramMessage(token, message.chat.id, "Выберите формат отправки всего архива:", {
+            inline_keyboard: [[
+              { text: "Исходный формат", callback_data: "arc_send_native:" + queued.id },
+              { text: "Как документы", callback_data: "arc_send_document:" + queued.id },
+            ]],
           });
-          if (error) throw new Error("Could not enqueue archive delivery");
-          await sendTelegramMessage(token, message.chat.id, "Полная отправка архива добавлена в очередь.");
         }
       } else if (command === "/cancel") {
         const { data, error } = await supabase.from("telegram_jobs").update({ status: "cancelled" })
-          .eq("job_type", "send_archive").eq("status", "queued").select("id");
+          .eq("job_type", "send_archive").in("status", ["queued", "running"]).select("id");
         if (error) throw new Error("Could not cancel archive delivery");
         await sendTelegramMessage(token, message.chat.id,
           data?.length ? "Ожидающая отправка отменена. Уже отправленные файлы останутся в чате." : "Нет ожидающей отправки для отмены.");
