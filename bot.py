@@ -302,11 +302,36 @@ def telegram_user(init_data: str):
         return None
 
 
+def make_session_token(uid: int) -> str:
+    expires = int(time.time()) + LOCK_SECONDS
+    payload = f"{uid}.{expires}"
+    signature = hmac.new(BOT_TOKEN.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def session_uid(token: str):
+    try:
+        uid_text, expires_text, signature = token.rsplit(".", 2)
+        payload = f"{uid_text}.{expires_text}"
+        expected = hmac.new(BOT_TOKEN.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            return None
+        uid, expires = int(uid_text), int(expires_text)
+        if uid <= 0 or expires <= time.time():
+            return None
+        return uid
+    except (ValueError, TypeError):
+        return None
+
+
 def api_user(request):
     user = telegram_user(request.headers.get("X-Telegram-Init-Data", "") or request.query.get("tgWebAppData", ""))
-    if not user:
-        return None
-    return int(user["id"]), user
+    if user:
+        return int(user["id"]), user
+    uid = session_uid(request.cookies.get("arc_session", ""))
+    if uid:
+        return uid, {"id": uid}
+    return None
 
 
 def api_auth(request):
@@ -314,7 +339,8 @@ def api_auth(request):
     if not data:
         return None
     uid, user = data
-    if not is_auth(uid):
+    cookie_uid = session_uid(request.cookies.get("arc_session", ""))
+    if not is_auth(uid) and cookie_uid != uid:
         return None
     return uid, user
 
@@ -328,7 +354,7 @@ async def api_me(request):
     if not data:
         return web.json_response({"error": "Invalid Telegram session"}, status=401)
     uid, user = data
-    return web.json_response({"authorized": is_auth(uid), "user": user})
+    return web.json_response({"authorized": is_auth(uid) or session_uid(request.cookies.get("arc_session", "")) == uid, "user": user})
 
 
 async def api_unlock(request):
@@ -343,7 +369,12 @@ async def api_unlock(request):
     if body.get("password") != PASSWORD:
         return await api_json_error("Wrong password", 403)
     unlocked[uid] = time.time() + LOCK_SECONDS
-    return web.json_response({"ok": True})
+    response = web.json_response({"ok": True})
+    response.set_cookie(
+        "arc_session", make_session_token(uid), max_age=LOCK_SECONDS,
+        httponly=True, secure=True, samesite="Strict", path="/api"
+    )
+    return response
 
 
 async def api_summary(request):
