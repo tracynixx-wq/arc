@@ -110,7 +110,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true });
   }
 
-  if (!message) return NextResponse.json({ ok: true });
+  if (!message || !message.from) return NextResponse.json({ ok: true });
   const text = message.text?.trim() ?? "";
 
   if (text.startsWith("/")) {
