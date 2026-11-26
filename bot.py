@@ -423,10 +423,19 @@ async def api_media_file(request):
                             "Media download attempt %s/3 failed for row=%s: %s",
                             attempt + 1, row_id, e
                         )
+                        # Telegram's hosted Bot API cannot download files above its size limit.
+                        # Retrying the same request cannot help and only stalls the archive.
+                        if "file is too big" in str(e).lower():
+                            break
                         if attempt < 2:
                             await asyncio.sleep(0.7 * (attempt + 1))
                 if payload is None:
                     logging.error("Telegram media download failed row=%s: %s", row_id, last_error)
+                    if last_error and "file is too big" in str(last_error).lower():
+                        return await api_json_error(
+                            "Файл превышает лимит загрузки стандартного Telegram Bot API. Для больших файлов нужен отдельный сервер Telegram Bot API.",
+                            413
+                        )
                     return await api_json_error(
                         "Не удалось получить файл из Telegram. Попробуй обновить страницу.", 502
                     )
