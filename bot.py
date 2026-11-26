@@ -69,7 +69,7 @@ def _headers(extra=None):
     return h
 
 
-async def db_add(uid, section, kind, file_id, unique_id, thumb_file_id=None):
+async def db_add(uid, section, kind, file_id, unique_id, thumb_file_id=None, file_name=None):
     async with session.post(
         f"{SUPABASE_URL}/rest/v1/media?on_conflict=user_id,file_unique_id",
         json={
@@ -79,6 +79,7 @@ async def db_add(uid, section, kind, file_id, unique_id, thumb_file_id=None):
             "file_id": file_id,
             "file_unique_id": unique_id,
             "thumb_file_id": thumb_file_id,
+            "file_name": (file_name or f"{kind}-{unique_id[:10]}")[:180],
         },
         headers=_headers(
             {"Prefer": "resolution=ignore-duplicates,return=representation"}
@@ -168,7 +169,8 @@ def extract(m: Message, uid: int):
         sec = "leaks"
     thumb = getattr(f, "thumbnail", None)
     thumb_file_id = thumb.file_id if thumb else (f.file_id if kind == "photo" else None)
-    return sec, kind, f.file_id, f.file_unique_id, thumb_file_id
+    file_name = (getattr(f, "file_name", None) or m.caption or f"{kind}-{f.file_unique_id[:10]}").strip()[:180]
+    return sec, kind, f.file_id, f.file_unique_id, thumb_file_id, file_name
 
 
 async def send_media(chat_id, kind, file_id, kb):
@@ -358,21 +360,43 @@ async def api_media(request):
         return web.json_response({"auth_required": True}, status=401)
     uid, _ = data
     section = request.query.get("section", "")
-    if section not in SECTIONS:
+    if section not in (*SECTIONS, "favorites"):
         return await api_json_error("Unknown section")
     try:
         page = max(0, int(request.query.get("page", "0")))
     except ValueError:
         page = 0
-    url = (f"{SUPABASE_URL}/rest/v1/media?select=id,kind,thumb_file_id"
-           f"&user_id=eq.{uid}&section=eq.{section}"
-           f"&order=id.desc&limit={PAGE_SIZE}&offset={page * PAGE_SIZE}")
-    async with session.get(url, headers=_headers()) as r:
+    kind = request.query.get("kind", "").strip()
+    if kind not in ("photo", "video", "animation", "video_note"):
+        kind = ""
+    query = request.query.get("q", "").strip()[:100]
+    query = query.replace("%", "").replace("*", "").replace(",", " ").replace("(", "").replace(")", "")
+    params = {
+        "select": "id,kind,thumb_file_id,file_name,is_favorite",
+        "user_id": f"eq.{uid}", "order": "id.desc",
+        "limit": str(PAGE_SIZE), "offset": str(page * PAGE_SIZE),
+    }
+    if section == "favorites":
+        params["is_favorite"] = "eq.true"
+    else:
+        params["section"] = f"eq.{section}"
+    if kind:
+        params["kind"] = f"eq.{kind}"
+    if query:
+        params["file_name"] = f"ilike.*{query}*"
+    async with session.get(
+        f"{SUPABASE_URL}/rest/v1/media", params=params,
+        headers=_headers({"Prefer": "count=exact"}),
+    ) as r:
         if r.status >= 300:
             logging.error("api_media list %s %s", r.status, await r.text())
             return await api_json_error("Database error", 500)
         items = await r.json()
-    total = await db_count(section, uid)
+        content_range = r.headers.get("Content-Range", "*/0")
+    try:
+        total = int(content_range.split("/")[-1])
+    except (ValueError, IndexError):
+        total = 0
     return web.json_response({"items": items, "total": total})
 
 
@@ -518,6 +542,67 @@ async def api_media_cover(request):
         return await api_json_error("Не удалось загрузить обложку", 502)
 
 
+async def api_toggle_favorite(request):
+    data = api_auth(request)
+    if not data:
+        return web.json_response({"auth_required": True}, status=401)
+    uid, _ = data
+    row_id = request.match_info["row_id"]
+    try:
+        favorite = bool((await request.json()).get("favorite"))
+    except Exception:
+        return await api_json_error("Invalid request")
+    url = f"{SUPABASE_URL}/rest/v1/media?id=eq.{row_id}&user_id=eq.{uid}"
+    async with session.patch(url, json={"is_favorite": favorite},
+                             headers=_headers({"Prefer": "return=representation"})) as r:
+        if r.status >= 300:
+            logging.error("favorite update %s %s", r.status, await r.text())
+            return await api_json_error("Не удалось обновить избранное", 500)
+        rows = await r.json()
+    if not rows:
+        return await api_json_error("File not found", 404)
+    return web.json_response({"ok": True, "is_favorite": rows[0].get("is_favorite", favorite)})
+
+
+async def api_profile(request):
+    data = api_auth(request)
+    if not data:
+        return web.json_response({"auth_required": True}, status=401)
+    uid, user = data
+    url = f"{SUPABASE_URL}/rest/v1/user_profiles?user_id=eq.{uid}&select=user_id,display_name,accent,theme,density"
+    if request.method == "GET":
+        async with session.get(url, headers=_headers()) as r:
+            if r.status >= 300:
+                logging.error("profile read %s %s", r.status, await r.text())
+                return await api_json_error("Не удалось загрузить профиль", 500)
+            rows = await r.json()
+        profile = rows[0] if rows else {}
+        profile.setdefault("display_name", user.get("first_name", "Пользователь"))
+        profile.setdefault("accent", "#a98dff")
+        profile.setdefault("theme", "dark")
+        profile.setdefault("density", "comfortable")
+        return web.json_response({"profile": profile, "telegram": user})
+    try:
+        body = await request.json()
+    except Exception:
+        return await api_json_error("Invalid request")
+    accents = {"#a98dff", "#63b3ed", "#70d6a5", "#ff9f70", "#f28bb8", "#f4d06f"}
+    accent, theme, density = body.get("accent", "#a98dff"), body.get("theme", "dark"), body.get("density", "comfortable")
+    display_name = str(body.get("display_name", "")).strip()[:32]
+    if accent not in accents or theme not in ("dark", "light") or density not in ("compact", "comfortable"):
+        return await api_json_error("Некорректные настройки профиля")
+    payload = {"user_id": uid, "display_name": display_name, "accent": accent,
+               "theme": theme, "density": density}
+    async with session.post(f"{SUPABASE_URL}/rest/v1/user_profiles?on_conflict=user_id",
+                            json=payload,
+                            headers=_headers({"Prefer": "resolution=merge-duplicates,return=representation"})) as r:
+        if r.status >= 300:
+            logging.error("profile save %s %s", r.status, await r.text())
+            return await api_json_error("Не удалось сохранить настройки", 500)
+        rows = await r.json()
+    return web.json_response({"ok": True, "profile": rows[0] if rows else payload})
+
+
 async def api_send_media(request):
     data = api_auth(request)
     if not data:
@@ -581,8 +666,8 @@ async def on_message(m: Message):
     # Password protection remains enabled for the Mini App API.
     item = extract(m, uid)
     if item:
-        section, kind, file_id, unique_id, thumb_file_id = item
-        saved = await db_add(uid, section, kind, file_id, unique_id, thumb_file_id)
+        section, kind, file_id, unique_id, thumb_file_id, file_name = item
+        saved = await db_add(uid, section, kind, file_id, unique_id, thumb_file_id, file_name)
         if saved:
             await safe_delete(chat_id, m.message_id)
         else:
@@ -649,6 +734,9 @@ async def main():
     app.router.add_get("/api/media", api_media)
     app.router.add_get("/api/media/{row_id}/file", api_media_file)
     app.router.add_get("/api/media/{row_id}/cover", api_media_cover)
+    app.router.add_post("/api/media/{row_id}/favorite", api_toggle_favorite)
+    app.router.add_get("/api/profile", api_profile)
+    app.router.add_post("/api/profile", api_profile)
     app.router.add_post("/api/media/{row_id}/send", api_send_media)
     app.router.add_delete("/api/media/{row_id}", api_delete_media)
     app.router.add_post("/api/mode", api_mode)
