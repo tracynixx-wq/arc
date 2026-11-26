@@ -8,6 +8,7 @@ import mimetypes
 import os
 import time
 from collections import OrderedDict
+from urllib.parse import quote
 
 import aiohttp
 from aiohttp import web
@@ -377,7 +378,7 @@ async def api_media(request):
     if section not in (*SECTIONS, "favorites", "all"):
         return await api_json_error("Unknown section")
     try:
-        page = max(0, int(request.query.get("page", "0")))
+        page = min(100000, max(0, int(request.query.get("page", "0"))))
     except ValueError:
         page = 0
     kind = request.query.get("kind", "").strip()
@@ -501,7 +502,7 @@ async def api_media_file(request):
         "Cache-Control": "private, max-age=600, stale-while-revalidate=60",
         "Accept-Ranges": "bytes",
         "ETag": etag,
-        "Content-Disposition": "inline" if kind != "document" else f'attachment; filename="arc-{row_id}"',
+        "Content-Disposition": "inline" if kind != "document" else f"attachment; filename*=UTF-8\'\'{quote(file_name or f\'arc-{row_id}\', safe=\'\')}",
     }
     if request.headers.get("If-None-Match") == etag and not request.headers.get("Range"):
         return web.Response(status=304, headers=headers)
