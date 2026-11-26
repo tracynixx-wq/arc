@@ -38,7 +38,7 @@ alter table media add column if not exists thumbnail_status text not null defaul
 alter table media add column if not exists thumbnail_error text;
 alter table media add column if not exists thumbnail_updated_at timestamptz;
 
-do $
+do $$
 begin
   if not exists (
     select 1 from pg_constraint
