@@ -351,7 +351,17 @@ async def api_summary(request):
     uid, user = data
     count_values = await asyncio.gather(*[db_count(key, uid) for key in SECTIONS])
     counts = dict(zip(SECTIONS, count_values))
-    return web.json_response({"counts": counts, "mode": mode.get(uid, "auto"), "user": user})
+    async with session.get(
+        f"{SUPABASE_URL}/rest/v1/media?select=id&user_id=eq.{uid}&is_favorite=eq.true&limit=1",
+        headers=_headers({"Prefer": "count=exact"}),
+    ) as r:
+        favorite_range = r.headers.get("Content-Range", "*/0")
+    try:
+        favorites = int(favorite_range.split("/")[-1])
+    except (ValueError, IndexError):
+        favorites = 0
+    return web.json_response({"counts": counts, "favorites": favorites,
+                              "mode": mode.get(uid, "auto"), "user": user})
 
 
 async def api_media(request):
