@@ -281,7 +281,7 @@ def telegram_user(init_data: str):
 
 
 def api_user(request):
-    user = telegram_user(request.headers.get("X-Telegram-Init-Data", ""))
+    user = telegram_user(request.headers.get("X-Telegram-Init-Data", "") or request.query.get("tgWebAppData", ""))
     if not user:
         return None
     return int(user["id"]), user
