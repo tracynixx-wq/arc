@@ -39,7 +39,7 @@ export async function GET(request: Request) {
 
     let query = supabase
       .from("media")
-      .select("id,filename,display_name,description,media_type,mime_type,size_bytes,uploaded_at,duration_ms,width,height,processing_status,is_trashed", { count: "exact" })
+      .select("id,filename,display_name,description,media_type,mime_type,size_bytes,uploaded_at,original_created_at,duration_ms,width,height,processing_status,is_trashed", { count: "exact" })
       .eq("is_trashed", view === "trash")
       .is("purged_at", null)
       .order("uploaded_at", { ascending: false })
