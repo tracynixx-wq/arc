@@ -796,6 +796,119 @@ def api_auth(request):
     return uid, user
 
 
+send_all_jobs: dict[int, dict] = {}
+send_all_tasks: dict[int, asyncio.Task] = {}
+
+
+async def _send_all_media_job(uid):
+    job = send_all_jobs[uid]
+    job.update({"state": "running", "sent": 0, "failed": 0, "total": 0, "current": ""})
+    offset = 0
+    page_size = 100
+    while True:
+        url = (f"{SUPABASE_URL}/rest/v1/media?select=id,kind,file_id,file_name,storage_path"
+               f"&user_id=eq.{uid}&order=id.asc&limit={page_size}&offset={offset}")
+        async with session.get(url, headers=_headers()) as response:
+            if response.status >= 300:
+                raise RuntimeError(f"Не удалось получить список медиа: {response.status}")
+            rows = await response.json()
+        if not rows:
+            break
+        if offset == 0:
+            job["total"] = await db_count_all(uid)
+        for row in rows:
+            row_id = row["id"]
+            name = (row.get("file_name") or f"arc-{row_id}").replace("/", "_").replace("\\\\", "_")[:120]
+            job["current"] = name
+            try:
+                payload = None
+                if row.get("storage_path"):
+                    object_url = f"{SUPABASE_URL}/storage/v1/object/{row['storage_path']}"
+                    async with session.get(object_url, headers=_headers(),
+                                           timeout=aiohttp.ClientTimeout(total=180, connect=15)) as stored:
+                        if stored.status >= 300:
+                            raise RuntimeError(f"Supabase Storage: HTTP {stored.status}")
+                        payload = await stored.read()
+                else:
+                    tg_file = await bot.get_file(row["file_id"], request_timeout=30)
+                    if tg_file.file_size and tg_file.file_size > 20 * 1024 * 1024:
+                        raise RuntimeError("нет резервной копии; Telegram не отдаёт файл больше 20 МиБ")
+                    buffer = io.BytesIO()
+                    await bot.download_file(tg_file.file_path, buffer, timeout=120,
+                                             chunk_size=256 * 1024)
+                    payload = buffer.getvalue()
+                if not payload:
+                    raise RuntimeError("файл пустой")
+                if len(payload) > 50 * 1024 * 1024:
+                    raise RuntimeError("превышен лимит отправки Telegram Bot API (50 МиБ)")
+                sent_file = BufferedInputFile(payload, filename=name)
+                while True:
+                    try:
+                        await bot.send_document(chat_id=uid, document=sent_file,
+                                                disable_notification=True)
+                        break
+                    except TelegramRetryAfter as exc:
+                        await asyncio.sleep(max(1, int(exc.retry_after)) + 1)
+                        sent_file = BufferedInputFile(payload, filename=name)
+                job["sent"] += 1
+            except Exception as exc:
+                job["failed"] += 1
+                logging.exception("Send-all failed row=%s user=%s", row_id, uid)
+                job.setdefault("errors", []).append({"id": row_id, "name": name,
+                                                       "error": str(exc)[:180]})
+                job["errors"] = job["errors"][-30:]
+            job["done"] = job["sent"] + job["failed"]
+            await asyncio.sleep(1.1)
+        offset += len(rows)
+        if len(rows) < page_size:
+            break
+    job["state"] = "completed"
+    job["current"] = ""
+    logging.info("Send-all completed user=%s sent=%s failed=%s total=%s",
+                 uid, job["sent"], job["failed"], job["total"])
+
+
+async def db_count_all(uid):
+    async with session.get(
+        f"{SUPABASE_URL}/rest/v1/media?select=id&user_id=eq.{uid}&limit=1",
+        headers=_headers({"Prefer": "count=exact"}),
+    ) as response:
+        if response.status >= 300:
+            raise RuntimeError("Не удалось посчитать медиа")
+        value = response.headers.get("Content-Range", "*/0").rsplit("/", 1)[-1]
+        return int(value) if value.isdigit() else 0
+
+
+async def api_send_all(request):
+    data = api_auth(request)
+    if not data:
+        return web.json_response({"auth_required": True}, status=401)
+    uid, _ = data
+    current = send_all_jobs.get(uid)
+    if current and current.get("state") == "running":
+        return web.json_response({"ok": True, "already_running": True, "job": current})
+    send_all_jobs[uid] = {"state": "starting", "sent": 0, "failed": 0,
+                          "done": 0, "total": 0, "errors": []}
+    async def runner():
+        try:
+            await _send_all_media_job(uid)
+        except Exception as exc:
+            logging.exception("Send-all job crashed user=%s", uid)
+            send_all_jobs[uid].update({"state": "failed", "error": str(exc)[:300]})
+    send_all_tasks[uid] = asyncio.create_task(runner())
+    return web.json_response({"ok": True, "job": send_all_jobs[uid]})
+
+
+async def api_send_all_status(request):
+    data = api_auth(request)
+    if not data:
+        return web.json_response({"auth_required": True}, status=401)
+    uid, _ = data
+    return web.json_response({"job": send_all_jobs.get(
+        uid, {"state": "idle", "sent": 0, "failed": 0, "done": 0, "total": 0}
+    )})
+
+
 async def api_json_error(message, status=400):
     return web.json_response({"error": message}, status=status)
 
@@ -1326,6 +1439,8 @@ async def main():
     app.router.add_post("/api/profile", api_profile)
     app.router.add_delete("/api/media/{row_id}", api_delete_media)
     app.router.add_post("/api/mode", api_mode)
+    app.router.add_post("/api/send-all", api_send_all)
+    app.router.add_get("/api/send-all/status", api_send_all_status)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
