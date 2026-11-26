@@ -149,12 +149,12 @@ async def db_set_thumbnail(row_id, thumb_file_id):
         return True
 
 
-async def db_missing_thumbnails():
+async def db_missing_thumbnails(after_id=0):
     url = (
         f"{SUPABASE_URL}/rest/v1/media"
         "?select=id,user_id,kind,file_id"
         "&kind=in.(video,video_note,animation)"
-        "&thumb_file_id=is.null&order=id.asc&limit=500"
+        f"&thumb_file_id=is.null&id=gt.{int(after_id)}&order=id.asc&limit=500"
     )
     async with session.get(url, headers=_headers()) as r:
         if r.status >= 300:
@@ -319,33 +319,38 @@ async def get_placeholder_thumbnail(uid, kind):
 
 
 async def backfill_missing_thumbnails():
-    """One bounded pass over existing rows; new uploads are handled immediately."""
+    """Backfill every missing cover using keyset pagination."""
     await asyncio.sleep(8)
-    rows = await db_missing_thumbnails()
-    if not rows:
-        logging.info("Thumbnail backfill: no missing video covers")
-        return
-    logging.info("Thumbnail backfill started: %s rows", len(rows))
-    done = 0
-    failed = 0
-    for row in rows:
-        thumb_id = await make_thumbnail(
-            int(row["user_id"]), row["file_id"], row["id"], backfill=True
-        )
-        if not thumb_id:
-            thumb_id = await get_placeholder_thumbnail(
-                int(row["user_id"]), row["kind"]
+    last_id = 0
+    total = done = failed = 0
+    while True:
+        rows = await db_missing_thumbnails(last_id)
+        if not rows:
+            break
+        for row in rows:
+            last_id = int(row["id"])
+            total += 1
+            thumb_id = await make_thumbnail(
+                int(row["user_id"]), row["file_id"], row["id"], backfill=True
             )
-        if thumb_id and await db_set_thumbnail(row["id"], thumb_id):
-            done += 1
-        else:
-            failed += 1
-        if (done + failed) % 10 == 0:
-            logging.info("Thumbnail backfill progress: %s/%s generated=%s failed=%s",
-                         done + failed, len(rows), done, failed)
-        await asyncio.sleep(0.35)
-    logging.info("Thumbnail backfill finished: generated=%s failed=%s total=%s",
-                 done, failed, len(rows))
+            if not thumb_id:
+                thumb_id = await get_placeholder_thumbnail(
+                    int(row["user_id"]), row["kind"]
+                )
+            if thumb_id and await db_set_thumbnail(row["id"], thumb_id):
+                done += 1
+            else:
+                failed += 1
+            if total % 10 == 0:
+                logging.info(
+                    "Thumbnail backfill progress: %s generated=%s failed=%s",
+                    total, done, failed
+                )
+            await asyncio.sleep(0.35)
+    logging.info(
+        "Thumbnail backfill finished: generated=%s failed=%s total=%s",
+        done, failed, total
+    )
 
 
 async def thumbnail_maintenance_loop():
