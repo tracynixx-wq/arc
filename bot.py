@@ -498,11 +498,12 @@ async def api_media_file(request):
         "video_note": "video/mp4", "animation": guessed_type or "video/mp4"
     }.get(kind, guessed_type or "application/octet-stream")
     etag = f'W/"{row_id}-{len(payload)}"'
+    download_name = file_name or "arc-" + row_id
     headers = {
         "Cache-Control": "private, max-age=600, stale-while-revalidate=60",
         "Accept-Ranges": "bytes",
         "ETag": etag,
-        "Content-Disposition": "inline" if kind != "document" else f"attachment; filename*=UTF-8\'\'{quote(file_name or f\'arc-{row_id}\', safe=\'\')}",
+        "Content-Disposition": "inline" if kind != "document" else f"attachment; filename*=UTF-8''{quote(download_name, safe='')}",
     }
     if request.headers.get("If-None-Match") == etag and not request.headers.get("Range"):
         return web.Response(status=304, headers=headers)
