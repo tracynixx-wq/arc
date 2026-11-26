@@ -4,7 +4,7 @@ Private media archive with Telegram-only ingestion and a responsive web gallery.
 
 ## Project status
 
-ARC 1.0 foundation. This branch is isolated from `main`; no production service is pointed at it yet.
+ARC 1.0 foundation. This branch is isolated from `main`; no production service is pointed at it yet. CI validation is enabled for this branch.
 
 ## Product rules
 
