@@ -137,7 +137,7 @@ async def db_delete(uid, row_id):
 
 
 async def db_set_thumbnail(row_id, thumb_file_id):
-    url = f"{SUPABASE_URL}/rest/v1/media?id=eq.{row_id}&thumb_file_id=is.null"
+    url = f"{SUPABASE_URL}/rest/v1/media?id=eq.{row_id}"
     async with session.patch(
         url, json={"thumb_file_id": thumb_file_id},
         headers=_headers({"Prefer": "return=minimal"}),
@@ -152,7 +152,7 @@ async def db_set_thumbnail(row_id, thumb_file_id):
 async def db_missing_thumbnails(after_id=0):
     url = (
         f"{SUPABASE_URL}/rest/v1/media"
-        "?select=id,user_id,kind,file_id"
+        "?select=id,user_id,kind,file_id,thumb_file_id"
         "&kind=in.(video,video_note,animation)"
         f"&thumb_file_id=is.null&id=gt.{int(after_id)}&order=id.asc&limit=500"
     )
@@ -164,11 +164,11 @@ async def db_missing_thumbnails(after_id=0):
 
 
 async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
-    """Create a small JPEG preview and store it as a Telegram photo file_id."""
+    """Create a short looping animated GIF cover and store its Telegram file_id."""
     try:
         tg_file = await bot.get_file(file_id, request_timeout=30)
         if tg_file.file_size and tg_file.file_size > 20 * 1024 * 1024:
-            logging.warning("thumbnail skipped row=%s: Telegram download limit exceeded (%s bytes)",
+            logging.warning("animated cover skipped row=%s: Telegram download limit exceeded (%s bytes)",
                             row_id, tg_file.file_size)
             return None
         source = io.BytesIO()
@@ -177,54 +177,51 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
         )
         media_bytes = source.getvalue()
         if not media_bytes or len(media_bytes) > 20 * 1024 * 1024:
-            logging.warning("thumbnail skipped row=%s: unsupported source size=%s",
-                            row_id, len(media_bytes))
             return None
 
-        # imageio-ffmpeg bundles a portable ffmpeg binary for Render's Python runtime.
         import imageio_ffmpeg
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         command = [
             ffmpeg, "-hide_banner", "-loglevel", "error",
-            "-i", "pipe:0",
-            "-frames:v", "1", "-vf",
-            "scale=480:480:force_original_aspect_ratio=decrease",
-            "-q:v", "5", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
+            "-i", "pipe:0", "-t", "2.5", "-an",
+            "-filter_complex",
+            "[0:v]fps=8,scale=320:-1:flags=lanczos,split[a][b];"
+            "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer",
+            "-loop", "0", "-f", "gif", "pipe:1",
         ]
         proc = await asyncio.create_subprocess_exec(
             *command, stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         try:
-            jpeg, error = await asyncio.wait_for(
-                proc.communicate(input=media_bytes), timeout=35
+            gif_bytes, error = await asyncio.wait_for(
+                proc.communicate(input=media_bytes), timeout=45
             )
         except asyncio.TimeoutError:
             proc.kill()
             await proc.communicate()
-            logging.warning("thumbnail ffmpeg timeout row=%s", row_id)
+            logging.warning("animated cover ffmpeg timeout row=%s", row_id)
             return None
-        if proc.returncode != 0 or not jpeg:
-            logging.warning("thumbnail ffmpeg failed row=%s: %s",
+        if proc.returncode != 0 or not gif_bytes or len(gif_bytes) > 8 * 1024 * 1024:
+            logging.warning("animated cover conversion failed row=%s: %s",
                             row_id, error.decode("utf-8", "ignore")[:300])
             return None
 
-        sent = await bot.send_photo(
+        sent = await bot.send_animation(
             chat_id=uid,
-            photo=BufferedInputFile(jpeg, filename=f"arc-cover-{row_id}.jpg"),
+            animation=BufferedInputFile(gif_bytes, filename=f"arc-cover-{row_id}.gif"),
             disable_notification=True,
         )
-        thumb_id = sent.photo[-1].file_id
+        thumb_id = sent.animation.file_id
         try:
             await bot.delete_message(uid, sent.message_id)
         except Exception as exc:
-            logging.warning("temporary cover message cleanup failed row=%s: %s", row_id, exc)
-        logging.info("thumbnail generated row=%s backfill=%s", row_id, backfill)
+            logging.warning("temporary animated cover cleanup failed row=%s: %s", row_id, exc)
+        logging.info("animated GIF cover generated row=%s backfill=%s", row_id, backfill)
         return thumb_id
     except Exception:
-        logging.exception("thumbnail generation failed row=%s backfill=%s", row_id, backfill)
+        logging.exception("animated GIF cover generation failed row=%s backfill=%s", row_id, backfill)
         return None
-
 
 async def generate_and_attach_thumbnail(uid, file_id, unique_id):
     try:
@@ -254,59 +251,58 @@ async def generate_and_attach_thumbnail(uid, file_id, unique_id):
 
 
 def make_placeholder_image(kind):
-    """Render a compact, branded cover when the original media cannot be downloaded."""
-    from PIL import Image, ImageDraw, ImageFont
-    width, height = 480, 600
-    image = Image.new("RGB", (width, height))
-    pixels = image.load()
-    top = (32, 27, 58) if kind == "video_note" else ((31, 39, 67) if kind == "video" else (49, 30, 66))
-    bottom = (105, 68, 160) if kind == "video_note" else ((49, 112, 145) if kind == "video" else (151, 73, 139))
-    for y in range(height):
-        t = y / max(1, height - 1)
-        color = tuple(int(top[c] * (1 - t) + bottom[c] * t) for c in range(3))
-        for x in range(width):
-            pixels[x, y] = color
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((76, 100, 404, 428), radius=54, outline=(255, 255, 255), width=5)
-    if kind == "video_note":
-        draw.ellipse((154, 178, 326, 350), outline=(255, 255, 255), width=8)
-        draw.ellipse((218, 242, 262, 286), fill=(255, 255, 255))
-        label = "VIDEO NOTE"
-    elif kind == "animation":
-        draw.polygon([(204, 174), (204, 354), (334, 264)], fill=(255, 255, 255))
-        draw.ellipse((130, 205, 182, 257), outline=(255, 255, 255), width=7)
-        label = "GIF"
-    else:
-        draw.polygon([(204, 174), (204, 354), (334, 264)], fill=(255, 255, 255))
-        label = "VIDEO"
-    try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 34)
-        small = ImageFont.truetype("DejaVuSans.ttf", 21)
-    except OSError:
-        font = ImageFont.load_default()
-        small = font
-    box = draw.textbbox((0, 0), label, font=font)
-    draw.text(((width - (box[2] - box[0])) / 2, 464), label, font=font, fill=(255, 255, 255))
-    subtitle = "ARC MEDIA ARCHIVE"
-    box = draw.textbbox((0, 0), subtitle, font=small)
-    draw.text(((width - (box[2] - box[0])) / 2, 526), subtitle, font=small, fill=(226, 220, 244))
+    """Create a small looping GIF fallback cover, not a static JPEG."""
+    from PIL import Image, ImageDraw
+    frames = []
+    width, height = 320, 400
+    palettes = {
+        "video": ((31, 39, 67), (49, 112, 145)),
+        "video_note": ((32, 27, 58), (105, 68, 160)),
+        "animation": ((49, 30, 66), (151, 73, 139)),
+    }
+    top, bottom = palettes.get(kind, palettes["video"])
+    label = {"video": "VIDEO", "video_note": "VIDEO NOTE", "animation": "GIF"}.get(kind, "MEDIA")
+    for frame_index in range(12):
+        shift = frame_index / 11
+        image = Image.new("RGB", (width, height))
+        draw = ImageDraw.Draw(image)
+        for y in range(height):
+            t = min(1, max(0, y / height + (shift - 0.5) * 0.12))
+            color = tuple(int(top[c] * (1-t) + bottom[c] * t) for c in range(3))
+            draw.line((0, y, width, y), fill=color)
+        pulse = int(5 * (1 + __import__("math").sin(frame_index * 2 * __import__("math").pi / 12)))
+        draw.rounded_rectangle((54-pulse, 68-pulse, 266+pulse, 280+pulse),
+                               radius=42, outline="white", width=4)
+        if kind == "video_note":
+            draw.ellipse((111, 121, 209, 219), outline="white", width=7)
+            draw.ellipse((151, 161, 169, 179), fill="white")
+        else:
+            draw.polygon([(132, 119), (132, 229), (218, 174)], fill="white")
+        try:
+            from PIL import ImageFont
+            font = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
+        except OSError:
+            font = ImageFont.load_default()
+        box = draw.textbbox((0, 0), label, font=font)
+        draw.text(((width-(box[2]-box[0]))/2, 315), label, font=font, fill="white")
+        frames.append(image)
     output = io.BytesIO()
-    image.save(output, format="JPEG", quality=82, optimize=True)
+    frames[0].save(output, format="GIF", save_all=True, append_images=frames[1:],
+                   duration=110, loop=0, optimize=True, disposal=2)
     return output.getvalue()
-
 
 async def get_placeholder_thumbnail(uid, kind):
     """Upload one reusable fallback cover per media kind."""
     if kind in placeholder_thumbnails:
         return placeholder_thumbnails[kind]
     try:
-        photo = BufferedInputFile(
-            make_placeholder_image(kind), filename=f"arc-{kind}-cover.jpg"
+        animation = BufferedInputFile(
+            make_placeholder_image(kind), filename=f"arc-{kind}-cover.gif"
         )
-        sent = await bot.send_photo(
-            chat_id=uid, photo=photo, disable_notification=True
+        sent = await bot.send_animation(
+            chat_id=uid, animation=animation, disable_notification=True
         )
-        thumb_id = sent.photo[-1].file_id
+        thumb_id = sent.animation.file_id
         placeholder_thumbnails[kind] = thumb_id
         try:
             await bot.delete_message(uid, sent.message_id)
@@ -319,7 +315,7 @@ async def get_placeholder_thumbnail(uid, kind):
 
 
 async def backfill_missing_thumbnails():
-    """Backfill every missing cover using keyset pagination."""
+    """Upgrade every video-like media cover to an animated GIF using keyset pagination."""
     await asyncio.sleep(8)
     last_id = 0
     total = done = failed = 0
@@ -329,6 +325,14 @@ async def backfill_missing_thumbnails():
             break
         for row in rows:
             last_id = int(row["id"])
+            existing = row.get("thumb_file_id")
+            if existing:
+                try:
+                    old_thumb = await bot.get_file(existing, request_timeout=15)
+                    if (old_thumb.file_path or "").lower().endswith(".gif"):
+                        continue
+                except Exception:
+                    logging.warning("Existing cover unreadable row=%s; replacing", row["id"])
             total += 1
             thumb_id = await make_thumbnail(
                 int(row["user_id"]), row["file_id"], row["id"], backfill=True
@@ -820,7 +824,8 @@ async def api_media_cover(request):
         buffer = io.BytesIO()
         await bot.download_file(tg_file.file_path, buffer, timeout=30)
         body = buffer.getvalue()
-        return web.Response(body=body, content_type="image/jpeg",
+        mime = "image/gif" if (tg_file.file_path or "").lower().endswith(".gif") else "image/jpeg"
+        return web.Response(body=body, content_type=mime,
                             headers={"Cache-Control":"private, max-age=3600"})
     except Exception:
         logging.exception("Thumbnail fetch failed row=%s", row_id)
