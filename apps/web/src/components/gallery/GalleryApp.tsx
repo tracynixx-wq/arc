@@ -1,5 +1,7 @@
 "use client";
 
+import Image from "next/image";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type MediaItem = {
@@ -114,12 +116,8 @@ export default function GalleryApp() {
   }, [search, status, loadPage]);
 
   useEffect(() => {
-    if (!active) {
-      setViewerFile(null);
-      return;
-    }
+    if (!active) return;
     let alive = true;
-    setViewerLoading(true);
     fetch(`/api/media/${active.id}/file?role=original`, { cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) throw new Error("Не удалось открыть оригинал.");
@@ -166,6 +164,8 @@ export default function GalleryApp() {
   }
 
   async function openItem(item: MediaItem) {
+    setViewerFile(null);
+    setViewerLoading(true);
     setActive(item);
     setMessage("");
   }
@@ -179,7 +179,7 @@ export default function GalleryApp() {
   return (
     <main className="shell">
       <aside className="sidebar">
-        <a className="brand" href="/" aria-label="ARC home"><span className="brand-mark">A</span><span>ARC</span></a>
+        <Link className="brand" href="/" aria-label="ARC home"><span className="brand-mark">A</span><span>ARC</span></Link>
         <div className="primary-action" title="Добавление доступно через Telegram-бота"><span>＋</span> Добавить через Telegram</div>
         <div className="nav-caption">БИБЛИОТЕКА</div>
         <nav className="navigation" aria-label="Разделы архива">
@@ -216,7 +216,7 @@ export default function GalleryApp() {
           {status === "ready" && items.length > 0 && <div className="masonry" aria-label="Медиаархив">
             {items.map((item) => <article className="media-card" key={item.id}>
               <button className="media-open" type="button" onClick={() => void openItem(item)} aria-label={`Открыть ${item.filename}`}>
-                {item.coverUrl ? <img src={item.coverUrl} alt={item.display_name || item.filename} loading="lazy" /> : <div className="media-placeholder">{item.media_type === "video" ? "▷" : item.media_type === "gif" ? "GIF" : "▧"}</div>}
+                {item.coverUrl ? <Image src={item.coverUrl} alt={item.display_name || item.filename} width={item.width ?? 800} height={item.height ?? 600} unoptimized style={{ width: "100%", height: "auto" }} /> : <div className="media-placeholder">{item.media_type === "video" ? "▷" : item.media_type === "gif" ? "GIF" : "▧"}</div>}
                 {item.media_type === "video" && <span className="media-type-pill">VIDEO</span>}
                 {item.media_type === "gif" && <span className="media-type-pill">GIF</span>}
               </button>
@@ -234,7 +234,7 @@ export default function GalleryApp() {
           <div className="viewer-stage">
             {viewerLoading && <span className="loader" />}
             {!viewerLoading && viewerFile && active.media_type === "video" && <video src={viewerFile.url} controls autoPlay playsInline />}
-            {!viewerLoading && viewerFile && active.media_type !== "video" && <img src={viewerFile.url} alt={title} />}
+            {!viewerLoading && viewerFile && active.media_type !== "video" && <Image src={viewerFile.url} alt={title} width={1600} height={1200} unoptimized style={{ width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />}
             {!viewerLoading && !viewerFile && <p>Не удалось загрузить оригинал.</p>}
           </div>
           <footer className="viewer-footer"><a className="secondary-button" href={viewerFile?.url ?? "#"} download={active.filename} aria-disabled={!viewerFile}>Скачать оригинал</a><button className="secondary-button" type="button" onClick={() => void toggleFavorite(active)}>{favoriteIds.has(active.id) ? "Убрать из избранного" : "В избранное"}</button><button className="danger-button" type="button" onClick={() => void moveToTrash(active)}>В корзину</button></footer>
