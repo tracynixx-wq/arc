@@ -1,3 +1,4 @@
 aiogram>=3.13,<4
 aiohttp>=3.9
 imageio-ffmpeg>=0.5.1,<1
+Pillow>=10,<12
