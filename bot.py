@@ -370,7 +370,7 @@ async def api_media(request):
         return web.json_response({"auth_required": True}, status=401)
     uid, _ = data
     section = request.query.get("section", "")
-    if section not in (*SECTIONS, "favorites"):
+    if section not in (*SECTIONS, "favorites", "all"):
         return await api_json_error("Unknown section")
     try:
         page = max(0, int(request.query.get("page", "0")))
@@ -388,7 +388,7 @@ async def api_media(request):
     }
     if section == "favorites":
         params["is_favorite"] = "eq.true"
-    else:
+    elif section != "all":
         params["section"] = f"eq.{section}"
     if kind:
         params["kind"] = f"eq.{kind}"
