@@ -6,6 +6,7 @@ import json
 import logging
 import mimetypes
 import os
+import subprocess
 import time
 from collections import OrderedDict
 from urllib.parse import quote
@@ -22,6 +23,7 @@ from aiogram.types import (
     Message,
     MenuButtonWebApp,
     WebAppInfo,
+    BufferedInputFile,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -130,6 +132,122 @@ async def db_delete(uid, row_id):
         headers=_headers(),
     ) as r:
         return r.status < 300
+
+
+async def db_set_thumbnail(row_id, thumb_file_id):
+    url = f"{SUPABASE_URL}/rest/v1/media?id=eq.{row_id}&thumb_file_id=is.null"
+    async with session.patch(
+        url, json={"thumb_file_id": thumb_file_id},
+        headers=_headers({"Prefer": "return=minimal"}),
+    ) as r:
+        if r.status >= 300:
+            logging.error("thumbnail save failed row=%s status=%s body=%s",
+                          row_id, r.status, await r.text())
+            return False
+        return True
+
+
+async def db_missing_thumbnails():
+    url = (
+        f"{SUPABASE_URL}/rest/v1/media"
+        "?select=id,user_id,kind,file_id"
+        "&kind=in.(video,video_note,animation)"
+        "&thumb_file_id=is.null&order=id.asc&limit=500"
+    )
+    async with session.get(url, headers=_headers()) as r:
+        if r.status >= 300:
+            logging.error("thumbnail backfill query failed: %s %s", r.status, await r.text())
+            return []
+        return await r.json()
+
+
+async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
+    """Create a small JPEG preview and store it as a Telegram photo file_id."""
+    try:
+        tg_file = await bot.get_file(file_id, request_timeout=30)
+        if tg_file.file_size and tg_file.file_size > 20 * 1024 * 1024:
+            logging.warning("thumbnail skipped row=%s: Telegram download limit exceeded (%s bytes)",
+                            row_id, tg_file.file_size)
+            return None
+        source = io.BytesIO()
+        await bot.download_file(
+            tg_file.file_path, source, timeout=90, chunk_size=256 * 1024
+        )
+        media_bytes = source.getvalue()
+        if not media_bytes or len(media_bytes) > 20 * 1024 * 1024:
+            logging.warning("thumbnail skipped row=%s: unsupported source size=%s",
+                            row_id, len(media_bytes))
+            return None
+
+        # imageio-ffmpeg bundles a portable ffmpeg binary for Render's Python runtime.
+        import imageio_ffmpeg
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        command = [
+            ffmpeg, "-hide_banner", "-loglevel", "error",
+            "-i", "pipe:0", "-ss", "0.8",
+            "-frames:v", "1", "-vf",
+            "scale=480:480:force_original_aspect_ratio=decrease",
+            "-q:v", "5", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *command, stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            jpeg, error = await asyncio.wait_for(
+                proc.communicate(input=media_bytes), timeout=35
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            logging.warning("thumbnail ffmpeg timeout row=%s", row_id)
+            return None
+        if proc.returncode != 0 or not jpeg:
+            logging.warning("thumbnail ffmpeg failed row=%s: %s",
+                            row_id, error.decode("utf-8", "ignore")[:300])
+            return None
+
+        sent = await bot.send_photo(
+            chat_id=uid,
+            photo=BufferedInputFile(jpeg, filename=f"arc-cover-{row_id}.jpg"),
+            disable_notification=True,
+        )
+        thumb_id = sent.photo[-1].file_id
+        try:
+            await bot.delete_message(uid, sent.message_id)
+        except Exception as exc:
+            logging.warning("temporary cover message cleanup failed row=%s: %s", row_id, exc)
+        logging.info("thumbnail generated row=%s backfill=%s", row_id, backfill)
+        return thumb_id
+    except Exception:
+        logging.exception("thumbnail generation failed row=%s backfill=%s", row_id, backfill)
+        return None
+
+
+async def backfill_missing_thumbnails():
+    """One bounded pass over existing rows; new uploads are handled immediately."""
+    await asyncio.sleep(8)
+    rows = await db_missing_thumbnails()
+    if not rows:
+        logging.info("Thumbnail backfill: no missing video covers")
+        return
+    logging.info("Thumbnail backfill started: %s rows", len(rows))
+    done = 0
+    failed = 0
+    for row in rows:
+        thumb_id = await make_thumbnail(
+            int(row["user_id"]), row["file_id"], row["id"], backfill=True
+        )
+        if thumb_id and await db_set_thumbnail(row["id"], thumb_id):
+            done += 1
+        else:
+            failed += 1
+        if (done + failed) % 10 == 0:
+            logging.info("Thumbnail backfill progress: %s/%s generated=%s failed=%s",
+                         done + failed, len(rows), done, failed)
+        await asyncio.sleep(0.35)
+    logging.info("Thumbnail backfill finished: generated=%s failed=%s total=%s",
+                 done, failed, len(rows))
 
 
 # ---------- helpers ----------
@@ -739,6 +857,18 @@ async def on_message(m: Message):
         section, kind, file_id, unique_id, thumb_file_id, file_name = item
         saved = await db_add(uid, section, kind, file_id, unique_id, thumb_file_id, file_name)
         if saved:
+            # Telegram normally supplies video thumbnails. Generate one if it does not.
+            if not thumb_file_id and kind in ("video", "video_note", "animation"):
+                cover_id = await make_thumbnail(uid, file_id, f"new-{unique_id[:12]}")
+                if cover_id:
+                    async with session.get(
+                        f"{SUPABASE_URL}/rest/v1/media?select=id"
+                        f"&user_id=eq.{uid}&file_unique_id=eq.{unique_id}&limit=1",
+                        headers=_headers(),
+                    ) as r:
+                        saved_rows = await r.json() if r.status < 300 else []
+                    if saved_rows:
+                        await db_set_thumbnail(saved_rows[0]["id"], cover_id)
             await safe_delete(chat_id, m.message_id)
         else:
             logging.error("Media save failed; original message retained user=%s", uid)
@@ -816,6 +946,7 @@ async def main():
     asyncio.create_task(self_ping())
     await bot.delete_webhook(drop_pending_updates=True)
     await configure_menu_button()
+    asyncio.create_task(backfill_missing_thumbnails())
     await dp.start_polling(bot)
 
 
