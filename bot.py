@@ -137,6 +137,118 @@ async def db_delete(uid, row_id):
         return r.status < 300
 
 
+async def db_set_original_path(row_id, storage_path):
+    payload = {
+        "storage_path": storage_path, "storage_status": "ready",
+        "storage_error": None,
+        "storage_updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    async with session.patch(
+        f"{SUPABASE_URL}/rest/v1/media?id=eq.{row_id}", json=payload,
+        headers=_headers({"Prefer": "return=representation"}),
+    ) as response:
+        if response.status >= 300:
+            logging.error("original storage DB update failed row=%s status=%s body=%s",
+                          row_id, response.status, await response.text())
+            return False
+        return bool(await response.json())
+
+
+async def set_original_storage_status(row_id, status, error=None):
+    payload = {
+        "storage_status": status, "storage_error": str(error)[:500] if error else None,
+        "storage_updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    async with session.patch(
+        f"{SUPABASE_URL}/rest/v1/media?id=eq.{row_id}", json=payload,
+        headers=_headers({"Prefer": "return=representation"}),
+    ) as response:
+        if response.status >= 300:
+            logging.error("original storage status update failed row=%s: %s",
+                          row_id, await response.text())
+            return False
+        return bool(await response.json())
+
+
+async def store_original_media(uid, unique_id, file_id):
+    """Save an original in private Supabase Storage before deleting its Telegram message."""
+    lookup = (f"{SUPABASE_URL}/rest/v1/media?select=id,storage_path"
+              f"&user_id=eq.{uid}&file_unique_id=eq.{unique_id}&limit=1")
+    async with session.get(lookup, headers=_headers()) as response:
+        if response.status >= 300:
+            logging.error("original storage lookup failed status=%s body=%s",
+                          response.status, await response.text())
+            return False, "Не удалось проверить хранилище"
+        rows = await response.json()
+    if not rows:
+        return False, "Запись медиа не найдена"
+    row = rows[0]
+    if row.get("storage_path"):
+        return True, None
+
+    temp_path = None
+    try:
+        tg_file = await bot.get_file(file_id, request_timeout=30)
+        if tg_file.file_size and tg_file.file_size > 20 * 1024 * 1024:
+            reason = "Файл больше 20 МиБ: стандартный Telegram Bot API не позволяет боту скачать его."
+            await set_original_storage_status(row["id"], "failed", reason)
+            return False, reason
+        with tempfile.NamedTemporaryFile(prefix="arc-original-", suffix=".bin", delete=False) as tmp:
+            temp_path = tmp.name
+        await bot.download_file(tg_file.file_path, temp_path, timeout=120, chunk_size=256 * 1024)
+        size = os.path.getsize(temp_path)
+        if size <= 0 or size > 50 * 1024 * 1024:
+            reason = "Файл пустой или превышает лимит Supabase Storage (50 МиБ)."
+            await set_original_storage_status(row["id"], "failed", reason)
+            return False, reason
+
+        object_path = f"arc-originals/{uid}/{row['id']}-{unique_id}"
+        mime = {
+            "video": "video/mp4", "video_note": "video/mp4",
+            "photo": "image/jpeg", "animation": "video/mp4",
+        }.get((await get_media_kind(row["id"])), "application/octet-stream")
+        headers = _headers({"Content-Type": mime, "x-upsert": "true"})
+        with open(temp_path, "rb") as source:
+            async with session.post(
+                f"{SUPABASE_URL}/storage/v1/object/{object_path}",
+                data=source, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=180, connect=15, sock_read=150),
+            ) as response:
+                if response.status not in (200, 201):
+                    reason = f"Supabase Storage вернул {response.status}: {(await response.text())[:350]}"
+                    await set_original_storage_status(row["id"], "failed", reason)
+                    return False, reason
+        if not await db_set_original_path(row["id"], object_path):
+            return False, "Оригинал загружен, но путь не записался в базу. Исходное сообщение сохранено."
+        logging.info("Original media stored in Supabase row=%s bytes=%s", row["id"], size)
+        return True, None
+    except Exception as exc:
+        reason = str(exc)[:400] or exc.__class__.__name__
+        logging.exception("Original media storage failed unique_id=%s", unique_id)
+        try:
+            await set_original_storage_status(row["id"], "failed", reason)
+        except Exception:
+            pass
+        return False, "Не удалось сохранить оригинал: " + reason
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                logging.warning("original temp file cleanup failed")
+
+
+async def get_media_kind(row_id):
+    async with session.get(
+        f"{SUPABASE_URL}/rest/v1/media?select=kind&id=eq.{row_id}",
+        headers=_headers(),
+    ) as response:
+        if response.status >= 300:
+            return ""
+        rows = await response.json()
+        return rows[0].get("kind", "") if rows else ""
+
+
 async def db_set_thumbnail(row_id, thumb_file_id):
     url = f"{SUPABASE_URL}/rest/v1/media?id=eq.{row_id}"
     payload = {
@@ -845,7 +957,7 @@ async def api_media_file(request):
         if cached:
             media_cache_bytes -= len(cached[1])
             media_cache.pop(cache_key, None)
-        url = (f"{SUPABASE_URL}/rest/v1/media?select=kind,file_id,file_name"
+        url = (f"{SUPABASE_URL}/rest/v1/media?select=kind,file_id,file_name,storage_path"
                f"&id=eq.{row_id}&user_id=eq.{uid}")
         async with session.get(url, headers=_headers()) as r:
             if r.status >= 300:
@@ -863,7 +975,19 @@ async def api_media_file(request):
                 media_cache.move_to_end(cache_key)
             else:
                 last_error = None
-                for attempt in range(3):
+                if rows[0].get("storage_path"):
+                    object_path = rows[0]["storage_path"]
+                    async with session.get(
+                        f"{SUPABASE_URL}/storage/v1/object/{object_path}",
+                        headers=_headers(),
+                    ) as storage_response:
+                        if storage_response.status >= 300:
+                            logging.error("original storage read failed row=%s status=%s body=%s",
+                                          row_id, storage_response.status,
+                                          (await storage_response.text())[:300])
+                            return await api_json_error("Не удалось загрузить оригинал из Supabase Storage", 502)
+                        payload = await storage_response.read()
+                for attempt in range(0 if payload is not None else 3):
                     try:
                         tg_file = await bot.get_file(rows[0]["file_id"], request_timeout=45)
                         buffer = io.BytesIO()
@@ -1119,6 +1243,15 @@ async def on_message(m: Message):
     if not saved:
         logging.error("Media save failed; original message retained user=%s", uid)
         await bot.send_message(chat_id, "❌ Не удалось сохранить файл в ARC. Исходное сообщение оставлено.")
+        return
+
+    stored, storage_error = await store_original_media(uid, unique_id, file_id)
+    if not stored:
+        await bot.send_message(
+            chat_id,
+            "⚠️ Запись добавлена в каталог, но резервная копия оригинала не создана. "
+            "Исходное сообщение оставлено в Telegram. Причина: " + (storage_error or "неизвестная ошибка")
+        )
         return
 
     # Acknowledge the database save before removing the incoming Telegram message.
