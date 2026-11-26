@@ -90,6 +90,9 @@ async def db_list(uid, section, page):
         f"&order=id.desc&limit={PAGE_SIZE}&offset={page * PAGE_SIZE}"
     )
     async with session.get(url, headers=_headers()) as r:
+        if r.status >= 300:
+            logging.error("db_list %s %s", r.status, await r.text())
+            return []
         return await r.json()
 
 
@@ -103,16 +106,15 @@ async def db_delete(uid, row_id):
 
 # ---------- helpers ----------
 def is_auth(uid: int) -> bool:
-    if uid == ADMIN_ID:
-        return True
+    # Password is required for every account, including the administrator.
     return unlocked.get(uid, 0) > time.time()
 
 
 async def safe_delete(chat_id, message_id):
     try:
         await bot.delete_message(chat_id, message_id)
-    except Exception:
-        pass
+    except Exception as e:
+        logging.warning("delete_message failed chat=%s message=%s: %s", chat_id, message_id, e)
 
 
 async def clear_view(chat_id, uid, drop_panel=False):
