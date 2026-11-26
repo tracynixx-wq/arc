@@ -454,16 +454,8 @@ async def ask_password(chat_id, uid):
 @dp.message(F.chat.type == "private")
 async def on_message(m: Message):
     uid, chat_id = m.from_user.id, m.chat.id
-    if not is_auth(uid):
-        await safe_delete(chat_id, m.message_id)
-        if m.text and m.text.strip() == PASSWORD:
-            unlocked[uid] = time.time() + LOCK_SECONDS
-            if uid in prompt:
-                await safe_delete(chat_id, prompt.pop(uid))
-            return
-        await ask_password(chat_id, uid)
-        return
-
+    # The bot is an upload-only endpoint: no password gate here.
+    # Password protection remains enabled for the Mini App API.
     item = extract(m, uid)
     if item:
         section, kind, file_id, unique_id = item
