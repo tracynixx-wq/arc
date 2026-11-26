@@ -4,6 +4,7 @@ import hmac
 import io
 import json
 import logging
+import mimetypes
 import os
 import time
 from collections import OrderedDict
@@ -355,6 +356,9 @@ async def api_summary(request):
         f"{SUPABASE_URL}/rest/v1/media?select=id&user_id=eq.{uid}&is_favorite=eq.true&limit=1",
         headers=_headers({"Prefer": "count=exact"}),
     ) as r:
+        if r.status >= 300:
+            logging.error("favorite count %s %s", r.status, await r.text())
+            return await api_json_error("Не удалось загрузить статистику", 500)
         favorite_range = r.headers.get("Content-Range", "*/0")
     try:
         favorites = int(favorite_range.split("/")[-1])
@@ -428,7 +432,7 @@ async def api_media_file(request):
         if cached:
             media_cache_bytes -= len(cached[1])
             media_cache.pop(cache_key, None)
-        url = (f"{SUPABASE_URL}/rest/v1/media?select=kind,file_id"
+        url = (f"{SUPABASE_URL}/rest/v1/media?select=kind,file_id,file_name"
                f"&id=eq.{row_id}&user_id=eq.{uid}")
         async with session.get(url, headers=_headers()) as r:
             if r.status >= 300:
@@ -483,10 +487,12 @@ async def api_media_file(request):
                         _, evicted = media_cache.popitem(last=False)
                         media_cache_bytes -= len(evicted[1])
 
+    file_name = rows[0].get("file_name") or "" if "rows" in locals() else ""
+    guessed_type = mimetypes.guess_type(file_name)[0] if file_name else None
     content_type = {
         "photo": "image/jpeg", "video": "video/mp4",
-        "video_note": "video/mp4", "animation": "video/mp4"
-    }.get(kind, "application/octet-stream")
+        "video_note": "video/mp4", "animation": guessed_type or "video/mp4"
+    }.get(kind, guessed_type or "application/octet-stream")
     etag = f'W/"{row_id}-{len(payload)}"'
     headers = {
         "Cache-Control": "private, max-age=600, stale-while-revalidate=60",
@@ -587,7 +593,8 @@ async def api_profile(request):
                 return await api_json_error("Не удалось загрузить профиль", 500)
             rows = await r.json()
         profile = rows[0] if rows else {}
-        profile.setdefault("display_name", user.get("first_name", "Пользователь"))
+        if not profile.get("display_name"):
+            profile["display_name"] = user.get("first_name", "Пользователь")
         profile.setdefault("accent", "#a98dff")
         profile.setdefault("theme", "dark")
         profile.setdefault("density", "comfortable")
