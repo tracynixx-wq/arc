@@ -190,7 +190,7 @@ async function retryTelegramJob(job: TelegramJob, error: unknown) {
     heartbeat_at: null,
     finished_at: exhausted ? new Date().toISOString() : null,
     error: { message, retryable: !exhausted },
-  }).eq("id", job.id);
+  }).eq("id", job.id).eq("status", "running");
 
   if (exhausted && job.telegram_chat_id) {
     try {
