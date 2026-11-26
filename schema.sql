@@ -38,6 +38,19 @@ alter table media add column if not exists thumbnail_status text not null defaul
 alter table media add column if not exists thumbnail_error text;
 alter table media add column if not exists thumbnail_updated_at timestamptz;
 
+do $
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'media_thumbnail_status_check'
+      and conrelid = 'media'::regclass
+  ) then
+    alter table media
+      add constraint media_thumbnail_status_check
+      check (thumbnail_status in ('pending','ready','failed','not_required'));
+  end if;
+end $;
+
 update media
 set thumbnail_status = case
   when kind in ('video','video_note','animation') and thumb_file_id like 'storage:%' then 'ready'
