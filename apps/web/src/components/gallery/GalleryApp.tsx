@@ -94,7 +94,11 @@ export default function GalleryApp() {
     if (collectionId) params.set("collection", collectionId);
     if (tagId) params.set("tag", tagId);
     const response = await fetch("/api/media?" + params.toString(), { cache: "no-store" });
-    if (response.status === 401) return false;
+    if (response.status === 401) {
+      setItems([]);
+      setStatus("telegram");
+      return false;
+    }
     if (!response.ok) throw new Error("Не удалось загрузить архив.");
     const result = await response.json() as GalleryResponse;
     if (requestId !== requestVersion.current) return true;
@@ -128,7 +132,8 @@ export default function GalleryApp() {
           cache: "no-store",
         });
         if (!auth.ok) throw new Error("Не удалось подтвердить вход через Telegram.");
-        await loadPage(1, "", "all");
+        const loadedAfterAuth = await loadPage(1, "", "all");
+        if (!loadedAfterAuth) throw new Error("Не удалось создать защищённую сессию. Откройте ARC в Telegram повторно.");
       } catch (error) {
         if (alive) {
           setMessage(error instanceof Error ? error.message : "Ошибка подключения.");
@@ -541,6 +546,8 @@ export default function GalleryApp() {
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
     setItems([]);
+    setSelectedIds(new Set());
+    setActive(null);
     setStatus("telegram");
   }
 
