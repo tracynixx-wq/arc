@@ -362,8 +362,11 @@ export default function GalleryApp() {
   }
 
   function toggleSelection(id: string) {
+    if (!selectedIds.has(id) && selectedIds.size >= 100) {
+      setMessage("За одну групповую операцию можно выбрать не более 100 файлов.");
+      return;
+    }
     setSelectedIds((current) => {
-      if (!current.has(id) && current.size >= 100) { setMessage("За одну групповую операцию можно выбрать не более 100 файлов."); return current; }
       const next = new Set(current);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
