@@ -49,12 +49,15 @@ export async function GET(request: Request) {
     if (ids.length) {
       const { data: covers } = await supabase
         .from("media_files")
-        .select("media_id,storage_bucket,storage_key")
+        .select("media_id,file_role,storage_bucket,storage_key")
         .in("media_id", ids)
-        .eq("file_role", "cover")
+        .in("file_role", ["cover", "original"])
         .eq("is_current", true);
 
       for (const cover of covers ?? []) {
+        const mediaItem = media.find((item) => item.id === cover.media_id);
+        const isPreview = cover.file_role === "cover" || mediaItem?.media_type === "photo";
+        if (!isPreview || coverUrls.has(cover.media_id)) continue;
         const { data: signed } = await supabase.storage
           .from(cover.storage_bucket)
           .createSignedUrl(cover.storage_key, 300);
