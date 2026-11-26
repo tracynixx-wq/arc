@@ -432,8 +432,9 @@ async function processCover(job: ProcessingJob) {
     await uploadTus(outputPath, "arc-covers", objectKey, "image/gif");
     await verifyStorageObject("arc-covers", objectKey);
 
-    await supabase.from("media_files").update({ is_current: false })
+    const { error: previousCoverError } = await supabase.from("media_files").update({ is_current: false })
       .eq("media_id", job.media_id).eq("file_role", "cover").eq("is_current", true);
+    if (previousCoverError) throw previousCoverError;
 
     const { error: insertError } = await supabase.from("media_files").insert({
       media_id: job.media_id,
