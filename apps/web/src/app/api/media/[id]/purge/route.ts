@@ -45,6 +45,9 @@ export async function POST(request: Request, context: RouteContext) {
       if (error) return NextResponse.json({ error: "Storage cleanup incomplete. Retry permanent deletion." }, { status: 503 });
     }
 
+    const { error: versionsError } = await supabase.from("media_versions").delete().eq("media_id", id);
+    if (versionsError) return NextResponse.json({ error: "Could not clear obsolete version references. Retry permanent deletion." }, { status: 503 });
+
     const { error: metadataError } = await supabase.from("media_files")
       .delete().eq("media_id", id).in("file_role", ["original", "cover", "preview"]);
     if (metadataError) return NextResponse.json({ error: "Files were removed but metadata cleanup failed. Retry." }, { status: 503 });
