@@ -454,6 +454,9 @@ async function processCover(job: ProcessingJob) {
 }
 
 async function processTelegramJob(job: TelegramJob) {
+  const heartbeat = setInterval(() => {
+    void supabase.from("telegram_jobs").update({ heartbeat_at: new Date().toISOString() }).eq("id", job.id).eq("status", "running");
+  }, 30_000);
   try {
     if (job.job_type !== "ingest") {
       // Archive delivery is handled by a separate queue consumer; keep it queued here.
@@ -467,10 +470,15 @@ async function processTelegramJob(job: TelegramJob) {
     await processIngest(job);
   } catch (error) {
     await retryTelegramJob(job, error);
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
 async function processProcessingJob(job: ProcessingJob) {
+  const heartbeat = setInterval(() => {
+    void supabase.from("processing_jobs").update({ heartbeat_at: new Date().toISOString() }).eq("id", job.id).eq("status", "running");
+  }, 30_000);
   try {
     if (job.job_type === "cover" || job.job_type === "cover_regenerate") {
       await processCover(job);
@@ -484,6 +492,8 @@ async function processProcessingJob(job: ProcessingJob) {
     }).eq("id", job.id);
   } catch (error) {
     await retryProcessingJob(job, error);
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
@@ -498,18 +508,14 @@ async function main() {
         lastRecovery = Date.now();
       }
 
-      const [telegramResult, coverResult] = await Promise.all([
-        supabase.rpc("claim_telegram_jobs", { p_worker_id: workerId, p_batch_size: 1 }),
-        supabase.rpc("claim_cover_jobs", { p_worker_id: workerId, p_batch_size: 1 }),
-      ]);
-
+      const telegramResult = await supabase.rpc("claim_telegram_jobs", { p_worker_id: workerId, p_batch_size: 1 });
       if (telegramResult.error) throw telegramResult.error;
-      if (coverResult.error) throw coverResult.error;
-
       const telegramJob = (telegramResult.data ?? [])[0] as TelegramJob | undefined;
-      const coverJob = (coverResult.data ?? [])[0] as ProcessingJob | undefined;
-
       if (telegramJob) await processTelegramJob(telegramJob);
+
+      const coverResult = await supabase.rpc("claim_cover_jobs", { p_worker_id: workerId, p_batch_size: 1 });
+      if (coverResult.error) throw coverResult.error;
+      const coverJob = (coverResult.data ?? [])[0] as ProcessingJob | undefined;
       if (coverJob) await processProcessingJob(coverJob);
       if (!telegramJob && !coverJob) await delay(2500);
     } catch (error) {
