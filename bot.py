@@ -55,7 +55,6 @@ shown: dict[int, list[int]] = {}
 mode: dict[int, str] = {}
 refresh_tasks: dict[int, asyncio.Task] = {}
 thumbnail_tasks: set[asyncio.Task] = set()
-placeholder_thumbnails: dict[str, str] = {}
 
 # Small in-process cache prevents repeat downloads of the same Telegram media.
 media_cache = OrderedDict()
@@ -319,68 +318,6 @@ async def generate_and_attach_thumbnail(uid, file_id, unique_id):
             logging.warning("Cover remains pending; will retry in maintenance pass row=%s", row_id)
     except Exception:
         logging.exception("async thumbnail attach failed unique_id=%s", unique_id)
-
-
-def make_placeholder_image(kind):
-    """Create a small looping GIF fallback cover, not a static JPEG."""
-    from PIL import Image, ImageDraw
-    frames = []
-    width, height = 320, 400
-    palettes = {
-        "video": ((31, 39, 67), (49, 112, 145)),
-        "video_note": ((32, 27, 58), (105, 68, 160)),
-        "animation": ((49, 30, 66), (151, 73, 139)),
-    }
-    top, bottom = palettes.get(kind, palettes["video"])
-    label = {"video": "VIDEO", "video_note": "VIDEO NOTE", "animation": "GIF"}.get(kind, "MEDIA")
-    for frame_index in range(12):
-        shift = frame_index / 11
-        image = Image.new("RGB", (width, height))
-        draw = ImageDraw.Draw(image)
-        for y in range(height):
-            t = min(1, max(0, y / height + (shift - 0.5) * 0.12))
-            color = tuple(int(top[c] * (1-t) + bottom[c] * t) for c in range(3))
-            draw.line((0, y, width, y), fill=color)
-        pulse = int(5 * (1 + __import__("math").sin(frame_index * 2 * __import__("math").pi / 12)))
-        draw.rounded_rectangle((54-pulse, 68-pulse, 266+pulse, 280+pulse),
-                               radius=42, outline="white", width=4)
-        if kind == "video_note":
-            draw.ellipse((111, 121, 209, 219), outline="white", width=7)
-            draw.ellipse((151, 161, 169, 179), fill="white")
-        else:
-            draw.polygon([(132, 119), (132, 229), (218, 174)], fill="white")
-        try:
-            from PIL import ImageFont
-            font = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
-        except OSError:
-            font = ImageFont.load_default()
-        box = draw.textbbox((0, 0), label, font=font)
-        draw.text(((width-(box[2]-box[0]))/2, 315), label, font=font, fill="white")
-        frames.append(image)
-    output = io.BytesIO()
-    frames[0].save(output, format="GIF", save_all=True, append_images=frames[1:],
-                   duration=110, loop=0, optimize=True, disposal=2)
-    return output.getvalue()
-
-async def get_placeholder_thumbnail(uid, kind):
-    """Upload one reusable fallback cover per media kind."""
-    if kind in placeholder_thumbnails:
-        return placeholder_thumbnails[kind]
-    try:
-        animation = BufferedInputFile(
-            make_placeholder_image(kind), filename=f"arc-{kind}-cover.gif"
-        )
-        sent = await send_cover_document(uid, animation)
-        thumb_id = sent.document.file_id
-        placeholder_thumbnails[kind] = thumb_id
-        try:
-            await bot.delete_message(uid, sent.message_id)
-        except Exception as exc:
-            logging.warning("placeholder message cleanup failed: %s", exc)
-        return thumb_id
-    except Exception:
-        logging.exception("placeholder cover upload failed kind=%s", kind)
-        return None
 
 
 async def backfill_missing_thumbnails():
