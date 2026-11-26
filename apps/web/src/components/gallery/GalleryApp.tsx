@@ -362,10 +362,6 @@ export default function GalleryApp() {
   }
 
   function toggleSelection(id: string) {
-    if (!selectedIds.has(id) && selectedIds.size >= 100) {
-      setMessage("За одну групповую операцию можно выбрать не более 100 файлов.");
-      return;
-    }
     setSelectedIds((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id); else next.add(id);
@@ -377,12 +373,15 @@ export default function GalleryApp() {
     if (!selectedIds.size) return;
     setBulkBusy(true);
     try {
-      const response = await fetch("/api/media/bulk", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action, ids: [...selectedIds] }),
-      });
-      const result = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(result.error ?? "Не удалось выполнить групповую операцию.");
+      const ids = [...selectedIds];
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const response = await fetch("/api/media/bulk", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action, ids: ids.slice(offset, offset + 100) }),
+        });
+        const result = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(result.error ?? "Не удалось выполнить групповую операцию.");
+      }
       setSelectedIds(new Set());
       setSelectionMode(false);
       if (action === "trash" || action === "restore" || (action === "unfavorite" && activeView === "favorites")) {
