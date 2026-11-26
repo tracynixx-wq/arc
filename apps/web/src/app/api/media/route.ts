@@ -59,13 +59,11 @@ export async function GET(request: Request) {
     const currentFavorites = new Set(favoriteIds);
 
     if (ids.length) {
-      const [{ data: files }, { data: favorites }] = await Promise.all([
-        supabase.from("media_files").select("media_id,file_role,storage_bucket,storage_key")
-          .in("media_id", ids).in("file_role", ["cover", "original"]).eq("is_current", true),
-        view === "favorites"
-          ? Promise.resolve({ data: ids.map((media_id) => ({ media_id })) })
-          : supabase.from("favorites").select("media_id").in("media_id", ids),
-      ]);
+      const { data: files } = await supabase.from("media_files").select("media_id,file_role,storage_bucket,storage_key")
+        .in("media_id", ids).in("file_role", ["cover", "original"]).eq("is_current", true);
+      const { data: favorites } = view === "favorites"
+        ? { data: ids.map((media_id) => ({ media_id })) }
+        : await supabase.from("favorites").select("media_id").in("media_id", ids);
 
       for (const favorite of favorites ?? []) currentFavorites.add(favorite.media_id);
 
