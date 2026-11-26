@@ -187,3 +187,12 @@ h1 { margin: 9px 0 7px; font-size: clamp(26px, 3vw, 35px); letter-spacing: -.045
   .viewer-edit { grid-template-columns: 1fr; }
   .viewer-edit label:nth-child(2) { grid-row: auto; }
 }
+
+
+.viewer-tags { display: grid; gap: 10px; padding: 13px 17px; border-top: 1px solid var(--line); }
+.viewer-tags > strong { color: #b6bbc7; font-size: 10px; }
+.tag-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.tag-check { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid #34313e; border-radius: 999px; background: #171a22; color: #c1c5cf; font-size: 9px; }
+.tag-check input { accent-color: #a78bfa; }
+.tag-create { display: flex; flex-wrap: wrap; gap: 7px; }
+.tag-create input { min-width: 120px; flex: 1; height: 32px; border: 1px solid #343947; border-radius: 8px; background: #171a22; color: var(--text); padding: 0 9px; font-size: 10px; }
