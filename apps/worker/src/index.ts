@@ -382,6 +382,8 @@ async function retryProcessingJob(job: ProcessingJob, error: unknown) {
 
 async function processCover(job: ProcessingJob) {
   if (!job.media_id) throw new Error("Cover job has no media_id.");
+  const { error: processingStateError } = await supabase.from("media").update({ processing_status: "processing" }).eq("id", job.media_id);
+  if (processingStateError) throw processingStateError;
   const { data: original, error } = await supabase.from("media_files").select("storage_bucket,storage_key,mime_type")
     .eq("media_id", job.media_id).eq("file_role", "original").eq("is_current", true).maybeSingle();
   if (error || !original) throw new Error("Verified original file is missing.");
