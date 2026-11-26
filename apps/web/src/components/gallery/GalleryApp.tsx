@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type MediaItem = {
   id: string;
@@ -52,6 +52,7 @@ function formatDate(value: string) {
 
 export default function GalleryApp() {
   const [items, setItems] = useState<MediaItem[]>([]);
+  const requestVersion = useRef(0);
   const [page, setPage] = useState(1);
   const [pageInput, setPageInput] = useState("1");
   const [hasMore, setHasMore] = useState(false);
@@ -81,6 +82,7 @@ export default function GalleryApp() {
   const viewTitles = { all: "Все медиа", recent: "Недавно добавленные", favorites: "Избранное", videos: "Видео", gifs: "GIF", photos: "Фото", trash: "Корзина" };
 
   const loadPage = useCallback(async (nextPage: number, query: string, view: typeof activeView, collectionId: string | null = null, tagId: string | null = null) => {
+    const requestId = ++requestVersion.current;
     const params = new URLSearchParams({ page: String(nextPage), q: query, view });
     if (collectionId) params.set("collection", collectionId);
     if (tagId) params.set("tag", tagId);
@@ -88,6 +90,7 @@ export default function GalleryApp() {
     if (response.status === 401) return false;
     if (!response.ok) throw new Error("Не удалось загрузить архив.");
     const result = await response.json() as GalleryResponse;
+    if (requestId !== requestVersion.current) return true;
     setItems(result.items);
     setPage(result.page);
     setPageInput(String(result.page));
