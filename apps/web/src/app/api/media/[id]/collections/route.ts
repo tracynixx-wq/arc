@@ -57,11 +57,19 @@ export async function PUT(request: Request, context: Context) {
       if ((found ?? []).length !== ids.length) return NextResponse.json({ error: "One or more collections do not exist." }, { status: 400 });
     }
 
-    const { error: deleteError } = await supabase.from("media_collections").delete().eq("media_id", id);
-    if (deleteError) return NextResponse.json({ error: "Could not update collection membership." }, { status: 500 });
-    if (ids.length) {
-      const { error: insertError } = await supabase.from("media_collections").insert(ids.map((collection_id) => ({ media_id: id, collection_id })));
+    const { data: currentRows, error: currentError } = await supabase.from("media_collections").select("collection_id").eq("media_id", id);
+    if (currentError) return NextResponse.json({ error: "Could not load current collection membership." }, { status: 500 });
+    const currentIds = (currentRows ?? []).map((row) => row.collection_id);
+    const toAdd = ids.filter((value) => !currentIds.includes(value));
+    const toRemove = currentIds.filter((value) => !ids.includes(value));
+
+    if (toAdd.length) {
+      const { error: insertError } = await supabase.from("media_collections").insert(toAdd.map((collection_id) => ({ media_id: id, collection_id })));
       if (insertError) return NextResponse.json({ error: "Could not save collection membership." }, { status: 500 });
+    }
+    if (toRemove.length) {
+      const { error: deleteError } = await supabase.from("media_collections").delete().eq("media_id", id).in("collection_id", toRemove);
+      if (deleteError) return NextResponse.json({ error: "Could not remove old collection membership." }, { status: 500 });
     }
 
     await supabase.from("activity_logs").insert({ action: "media.collections_updated", entity_type: "media", entity_id: id, details: { collection_count: ids.length } });
