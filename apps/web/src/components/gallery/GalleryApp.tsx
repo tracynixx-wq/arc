@@ -18,6 +18,7 @@ type MediaItem = {
   height: number | null;
   processing_status: string;
   coverUrl: string | null;
+  isFavorite: boolean;
 };
 
 type GalleryResponse = { items: MediaItem[]; page: number; pageSize: number; hasMore: boolean; total: number | null };
@@ -58,9 +59,11 @@ export default function GalleryApp() {
   const [viewerFile, setViewerFile] = useState<ViewerFile | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [activeView, setActiveView] = useState<"all" | "recent" | "favorites" | "videos" | "gifs" | "photos" | "trash">("all");
+  const viewTitles = { all: "Все медиа", recent: "Недавно добавленные", favorites: "Избранное", videos: "Видео", gifs: "GIF", photos: "Фото", trash: "Корзина" };
 
-  const loadPage = useCallback(async (nextPage: number, query: string) => {
-    const response = await fetch(`/api/media?page=${nextPage}&q=${encodeURIComponent(query)}`, { cache: "no-store" });
+  const loadPage = useCallback(async (nextPage: number, query: string, view: typeof activeView = activeView) => {
+    const response = await fetch(`/api/media?page=${nextPage}&q=${encodeURIComponent(query)}&view=${view}`, { cache: "no-store" });
     if (response.status === 401) return false;
     if (!response.ok) throw new Error("Не удалось загрузить архив.");
     const result = await response.json() as GalleryResponse;
@@ -68,6 +71,7 @@ export default function GalleryApp() {
     setPage(result.page);
     setHasMore(result.hasMore);
     setTotal(result.total);
+    setFavoriteIds(new Set(result.items.filter((item) => item.isFavorite).map((item) => item.id)));
     setStatus("ready");
     return true;
   }, []);
@@ -76,7 +80,7 @@ export default function GalleryApp() {
     let alive = true;
     const initialize = async () => {
       try {
-        const loaded = await loadPage(1, "");
+        const loaded = await loadPage(1, "", "all");
         if (loaded || !alive) return;
         const initData = window.Telegram?.WebApp?.initData;
         if (!initData) {
@@ -92,7 +96,7 @@ export default function GalleryApp() {
           cache: "no-store",
         });
         if (!auth.ok) throw new Error("Не удалось подтвердить вход через Telegram.");
-        await loadPage(1, "");
+        await loadPage(1, "", "all");
       } catch (error) {
         if (alive) {
           setMessage(error instanceof Error ? error.message : "Ошибка подключения.");
@@ -107,13 +111,13 @@ export default function GalleryApp() {
   useEffect(() => {
     if (status !== "ready") return;
     const timer = window.setTimeout(() => {
-      void loadPage(1, search).catch((error: unknown) => {
+      void loadPage(1, search, activeView).catch((error: unknown) => {
         setMessage(error instanceof Error ? error.message : "Ошибка поиска.");
         setStatus("error");
       });
     }, 220);
     return () => window.clearTimeout(timer);
-  }, [search, status, loadPage]);
+  }, [search, status, loadPage, activeView]);
 
   useEffect(() => {
     if (!active) return;
@@ -133,10 +137,18 @@ export default function GalleryApp() {
 
   async function changePage(nextPage: number) {
     try {
-      await loadPage(nextPage, search);
+      await loadPage(nextPage, search, activeView);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Ошибка загрузки страницы.");
     }
+  }
+
+  async function selectView(view: typeof activeView) {
+    setActiveView(view);
+    setSearch("");
+    setActive(null);
+    try { await loadPage(1, "", view); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Ошибка загрузки раздела."); }
   }
 
   async function toggleFavorite(item: MediaItem) {
@@ -163,6 +175,13 @@ export default function GalleryApp() {
     setActive(null);
   }
 
+  async function restoreItem(item: MediaItem) {
+    const response = await fetch(`/api/media/${item.id}/restore`, { method: "POST" });
+    if (!response.ok) { setMessage("Не удалось восстановить файл."); return; }
+    setItems((current) => current.filter((entry) => entry.id !== item.id));
+    setActive(null);
+  }
+
   async function openItem(item: MediaItem) {
     setViewerFile(null);
     setViewerLoading(true);
@@ -183,20 +202,20 @@ export default function GalleryApp() {
         <div className="primary-action" title="Добавление доступно через Telegram-бота"><span>＋</span> Добавить через Telegram</div>
         <div className="nav-caption">БИБЛИОТЕКА</div>
         <nav className="navigation" aria-label="Разделы архива">
-          <button className="nav-item active" type="button"><span className="nav-icon">▦</span><span>Все медиа</span><small>{total ?? "—"}</small></button>
-          <button className="nav-item" type="button" disabled><span className="nav-icon">◷</span><span>Недавно добавленные</span></button>
-          <button className="nav-item" type="button" disabled><span className="nav-icon">♡</span><span>Избранное</span></button>
-          <button className="nav-item" type="button" disabled><span className="nav-icon">▷</span><span>Видео</span></button>
-          <button className="nav-item" type="button" disabled><span className="nav-icon">GIF</span><span>GIF</span></button>
-          <button className="nav-item" type="button" disabled><span className="nav-icon">▧</span><span>Фото</span></button>
-          <button className="nav-item" type="button" disabled><span className="nav-icon">⌫</span><span>Корзина</span></button>
+          <button className={activeView === "all" ? "nav-item active" : "nav-item"} type="button" onClick={() => void selectView("all")}><span className="nav-icon">▦</span><span>Все медиа</span></button>
+          <button className={activeView === "recent" ? "nav-item active" : "nav-item"} type="button" onClick={() => void selectView("recent")}><span className="nav-icon">◷</span><span>Недавно добавленные</span></button>
+          <button className={activeView === "favorites" ? "nav-item active" : "nav-item"} type="button" onClick={() => void selectView("favorites")}><span className="nav-icon">♡</span><span>Избранное</span></button>
+          <button className={activeView === "videos" ? "nav-item active" : "nav-item"} type="button" onClick={() => void selectView("videos")}><span className="nav-icon">▷</span><span>Видео</span></button>
+          <button className={activeView === "gifs" ? "nav-item active" : "nav-item"} type="button" onClick={() => void selectView("gifs")}><span className="nav-icon">GIF</span><span>GIF</span></button>
+          <button className={activeView === "photos" ? "nav-item active" : "nav-item"} type="button" onClick={() => void selectView("photos")}><span className="nav-icon">▧</span><span>Фото</span></button>
+          <button className={activeView === "trash" ? "nav-item active" : "nav-item"} type="button" onClick={() => void selectView("trash")}><span className="nav-icon">⌫</span><span>Корзина</span></button>
         </nav>
         <div className="sidebar-bottom"><span className="status-dot" /><span>ARC 1.0 · приватный архив</span></div>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
-          <div className="breadcrumbs">Библиотека <span>/</span> Все медиа</div>
+          <div className="breadcrumbs">Библиотека <span>/</span> {viewTitles[activeView]}</div>
           <div className="topbar-actions">
             <label className="search"><span>⌕</span><input aria-label="Поиск по архиву" placeholder="Поиск по названию…" value={search} onChange={(event) => setSearch(event.target.value)} /><kbd>⌘ K</kbd></label>
             <button className="avatar" type="button" aria-label="Выйти" onClick={logout}>A</button>
@@ -205,14 +224,14 @@ export default function GalleryApp() {
 
         <div className="content">
           <div className="page-heading">
-            <div><div className="eyebrow">ЛИЧНЫЙ АРХИВ</div><h1>Все медиа</h1><p>Фото, видео и GIF в одном приватном пространстве.</p></div>
+            <div><div className="eyebrow">ЛИЧНЫЙ АРХИВ</div><h1>{viewTitles[activeView]}</h1><p>Фото, видео и GIF в одном приватном пространстве.</p></div>
             <div className="heading-meta">Сначала новые <span>⌄</span></div>
           </div>
 
           {status === "loading" && <div className="state-panel"><span className="loader" /><h2>Подключение к архиву</h2><p>Проверяем защищённую сессию.</p></div>}
           {status === "telegram" && <div className="state-panel"><div className="state-icon">↗</div><h2>Войдите через Telegram</h2><p>Откройте ARC из личного Telegram-бота. Вход доступен только владельцу архива.</p><div className="empty-note"><span className="status-dot" /> Сессия сохраняется до выхода или отзыва доступа</div></div>}
           {status === "error" && <div className="state-panel"><div className="state-icon">!</div><h2>Не удалось подключиться</h2><p>{message}</p><button className="secondary-button" onClick={() => window.location.reload()}>Повторить</button></div>}
-          {status === "ready" && items.length === 0 && <div className="state-panel"><div className="empty-art"><div className="art-card art-one">▧</div><div className="art-card art-two">▷</div><div className="art-card art-three">GIF</div></div><h2>{search ? "Ничего не найдено" : "Архив пока пуст"}</h2><p>{search ? "Измените поисковый запрос." : "Отправляйте фото, видео и GIF своему Telegram-боту. После сохранения они появятся здесь."}</p></div>}
+          {status === "ready" && items.length === 0 && <div className="state-panel"><div className="empty-art"><div className="art-card art-one">▧</div><div className="art-card art-two">▷</div><div className="art-card art-three">GIF</div></div><h2>{search ? "Ничего не найдено" : activeView === "trash" ? "Корзина пуста" : activeView === "favorites" ? "Избранное пока пусто" : "Архив пока пуст"}</h2><p>{search ? "Измените поисковый запрос." : activeView === "trash" ? "Удалённые файлы будут храниться здесь до окончательного удаления." : activeView === "favorites" ? "Отмечайте файлы сердечком, чтобы собрать их здесь." : "Отправляйте фото, видео и GIF своему Telegram-боту. После сохранения они появятся здесь."}</p></div>}
           {status === "ready" && items.length > 0 && <div className="masonry" aria-label="Медиаархив">
             {items.map((item) => <article className="media-card" key={item.id}>
               <button className="media-open" type="button" onClick={() => void openItem(item)} aria-label={`Открыть ${item.filename}`}>
@@ -237,7 +256,7 @@ export default function GalleryApp() {
             {!viewerLoading && viewerFile && active.media_type !== "video" && <Image src={viewerFile.url} alt={title} width={1600} height={1200} unoptimized style={{ width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />}
             {!viewerLoading && !viewerFile && <p>Не удалось загрузить оригинал.</p>}
           </div>
-          <footer className="viewer-footer"><a className="secondary-button" href={viewerFile?.url ?? "#"} download={active.filename} aria-disabled={!viewerFile}>Скачать оригинал</a><button className="secondary-button" type="button" onClick={() => void toggleFavorite(active)}>{favoriteIds.has(active.id) ? "Убрать из избранного" : "В избранное"}</button><button className="danger-button" type="button" onClick={() => void moveToTrash(active)}>В корзину</button></footer>
+          <footer className="viewer-footer"><a className="secondary-button" href={viewerFile?.url ?? "#"} download={active.filename} aria-disabled={!viewerFile}>Скачать оригинал</a><button className="secondary-button" type="button" onClick={() => void toggleFavorite(active)}>{favoriteIds.has(active.id) ? "Убрать из избранного" : "В избранное"}</button>{activeView === "trash" ? <button className="secondary-button" type="button" onClick={() => void restoreItem(active)}>Восстановить</button> : <button className="danger-button" type="button" onClick={() => void moveToTrash(active)}>В корзину</button>}</footer>
         </section>
       </div>}
       {message && status !== "error" && <div className="toast" role="status">{message}<button type="button" onClick={() => setMessage("")}>×</button></div>}
