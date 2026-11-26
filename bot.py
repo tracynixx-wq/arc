@@ -371,18 +371,53 @@ async def api_media_file(request):
     if not rows:
         return await api_json_error("File not found", 404)
     try:
-        tg_file = await bot.get_file(rows[0]["file_id"])
-        buffer = io.BytesIO()
-        await bot.download_file(tg_file.file_path, buffer)
+        # Telegram file delivery can be slow on Render Free; use longer timeouts and retry transient failures.
+        last_error = None
+        for attempt in range(3):
+            try:
+                tg_file = await bot.get_file(rows[0]["file_id"], request_timeout=90)
+                buffer = io.BytesIO()
+                await bot.download_file(tg_file.file_path, buffer, timeout=300, chunk_size=256 * 1024)
+                break
+            except Exception as e:
+                last_error = e
+                logging.warning("Media download attempt %s/3 failed for row=%s: %s", attempt + 1, row_id, e)
+                if attempt < 2:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+        else:
+            raise last_error or RuntimeError("Telegram download failed")
+
+        payload = buffer.getvalue()
+        kind = rows[0]["kind"]
         content_type = {
             "photo": "image/jpeg", "video": "video/mp4",
             "video_note": "video/mp4", "animation": "video/mp4"
-        }.get(rows[0]["kind"], "application/octet-stream")
-        return web.Response(body=buffer.getvalue(), content_type=content_type,
-                            headers={"Cache-Control": "private, max-age=300"})
+        }.get(kind, "application/octet-stream")
+        headers = {
+            "Cache-Control": "private, max-age=300",
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": "inline" if kind != "document" else f'attachment; filename="arc-{row_id}"',
+        }
+        range_header = request.headers.get("Range", "")
+        if range_header.startswith("bytes=") and "," not in range_header:
+            try:
+                start_text, end_text = range_header[6:].split("-", 1)
+                start = int(start_text) if start_text else 0
+                end = int(end_text) if end_text else len(payload) - 1
+                if start < 0 or start >= len(payload) or end < start:
+                    return web.Response(status=416, headers={"Content-Range": f"bytes */{len(payload)}"})
+                end = min(end, len(payload) - 1)
+                chunk = payload[start:end + 1]
+                headers["Content-Range"] = f"bytes {start}-{end}/{len(payload)}"
+                headers["Content-Length"] = str(len(chunk))
+                return web.Response(status=206, body=chunk, content_type=content_type, headers=headers)
+            except (ValueError, TypeError):
+                pass
+        headers["Content-Length"] = str(len(payload))
+        return web.Response(body=payload, content_type=content_type, headers=headers)
     except Exception as e:
-        logging.exception("Telegram media download failed: %s", e)
-        return await api_json_error("Telegram file unavailable", 502)
+        logging.exception("Telegram media download failed row=%s: %s", row_id, e)
+        return await api_json_error("Не удалось получить файл из Telegram. Попробуй обновить страницу.", 502)
 
 
 async def api_delete_media(request):
