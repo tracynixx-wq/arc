@@ -304,6 +304,8 @@ export default function GalleryApp() {
   }
 
   async function selectCollection(id: string) {
+    setSelectedIds(new Set());
+    setSelectionMode(false);
     setActiveCollectionId(id);
     setActiveTagId(null);
     setActiveView("all");
@@ -314,6 +316,8 @@ export default function GalleryApp() {
   }
 
   async function selectTag(id: string) {
+    setSelectedIds(new Set());
+    setSelectionMode(false);
     setActiveTagId(id);
     setActiveCollectionId(null);
     setActiveView("all");
@@ -358,7 +362,12 @@ export default function GalleryApp() {
   }
 
   function toggleSelection(id: string) {
-    setSelectedIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+    setSelectedIds((current) => {
+      if (!current.has(id) && current.size >= 100) { setMessage("За одну групповую операцию можно выбрать не более 100 файлов."); return current; }
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   }
 
   async function runBulkAction(action: "trash" | "restore" | "favorite" | "unfavorite") {
