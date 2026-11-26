@@ -40,7 +40,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     if (!Object.keys(update).length) return NextResponse.json({ error: "No editable fields supplied." }, { status: 400 });
 
     const supabase = createSupabaseAdmin();
-    const { data, error } = await supabase.from("media").update(update).eq("id", id).eq("is_trashed", false)
+    const { data, error } = await supabase.from("media").update(update).eq("id", id).eq("is_trashed", false).is("purged_at", null)
       .select("id,filename,display_name,description,original_created_at").maybeSingle();
     if (error) return NextResponse.json({ error: "Could not update media." }, { status: 500 });
     if (!data) return NextResponse.json({ error: "Media not found." }, { status: 404 });
