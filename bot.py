@@ -185,7 +185,7 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         command = [
             ffmpeg, "-hide_banner", "-loglevel", "error",
-            "-i", "pipe:0", "-ss", "0.8",
+            "-i", "pipe:0",
             "-frames:v", "1", "-vf",
             "scale=480:480:force_original_aspect_ratio=decrease",
             "-q:v", "5", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
