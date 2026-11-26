@@ -370,6 +370,8 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
         thumb_id = await upload_cover_storage(row_id, gif_bytes)
         if thumb_id:
             logging.info("animated GIF cover generated row=%s backfill=%s", row_id, backfill)
+        else:
+            await db_set_thumbnail_status(row_id, "failed", "GIF generated but upload to Supabase Storage failed")
         return thumb_id
     except Exception as exc:
         logging.exception("animated GIF cover generation failed row=%s backfill=%s", row_id, backfill)
@@ -396,7 +398,6 @@ async def generate_and_attach_thumbnail(uid, file_id, unique_id):
             if not await db_set_thumbnail(row_id, thumb_id):
                 await db_set_thumbnail_status(row_id, "failed", "GIF uploaded but database row was not updated")
         else:
-            await db_set_thumbnail_status(row_id, "failed", "GIF generation failed; see server log for details")
             logging.warning("Cover generation failed row=%s; status set to failed", row_id)
     except Exception:
         logging.exception("async thumbnail attach failed unique_id=%s", unique_id)
@@ -441,9 +442,9 @@ async def backfill_missing_thumbnails():
                 generated += 1
             else:
                 failed += 1
-                await db_set_thumbnail_status(
-                    row["id"], "failed",
-                    "Generation or database save failed; inspect Render logs for the detailed cause"
+                logging.warning(
+                    "Cover generation failed row=%s; detailed failure status retained",
+                    row["id"]
                 )
 
             if scanned % 10 == 0:
