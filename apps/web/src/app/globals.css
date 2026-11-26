@@ -175,3 +175,15 @@ h1 { margin: 9px 0 7px; font-size: clamp(26px, 3vw, 35px); letter-spacing: -.045
   .viewer-footer { padding-bottom: max(13px,env(safe-area-inset-bottom)); }
   .custom-collections { display: none; }
 }
+
+
+.viewer-edit { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; padding: 14px 17px; border-top: 1px solid var(--line); }
+.viewer-edit label { display: grid; gap: 6px; color: #aeb4c0; font-size: 10px; }
+.viewer-edit label:nth-child(2) { grid-row: span 2; }
+.viewer-edit input, .viewer-edit textarea { width: 100%; min-width: 0; border: 1px solid #343947; border-radius: 7px; background: #171a22; color: var(--text); padding: 9px; font-size: 11px; }
+.viewer-edit textarea { min-height: 78px; resize: vertical; }
+.viewer-edit > div { display: flex; flex-wrap: wrap; gap: 7px; align-items: end; }
+@media (max-width: 600px) {
+  .viewer-edit { grid-template-columns: 1fr; }
+  .viewer-edit label:nth-child(2) { grid-row: auto; }
+}
