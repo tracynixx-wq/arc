@@ -427,9 +427,10 @@ async def on_message(m: Message):
     if item:
         section, kind, file_id, unique_id = item
         saved = await db_add(uid, section, kind, file_id, unique_id)
-        if not saved:
-            logging.error("Media save failed for user=%s", uid)
-        await safe_delete(chat_id, m.message_id)
+        if saved:
+            await safe_delete(chat_id, m.message_id)
+        else:
+            logging.error("Media save failed; original message retained user=%s", uid)
         return
     await safe_delete(chat_id, m.message_id)
 
