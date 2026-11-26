@@ -40,7 +40,12 @@ function mediaPayload(message: TelegramMessage) {
   }
   if (message.video) return { type: "video", ...message.video };
   if (message.animation) return { type: "gif", ...message.animation, mime_type: message.animation.mime_type ?? "image/gif" };
-  if (message.document) return { type: "other", ...message.document };
+  if (message.document) {
+    const mime = message.document.mime_type ?? "";
+    const filename = message.document.file_name ?? "";
+    const type = mime.startsWith("video/") ? "video" : mime === "image/gif" || filename.toLowerCase().endsWith(".gif") ? "gif" : mime.startsWith("image/") ? "photo" : "other";
+    return { type, ...message.document };
+  }
   return null;
 }
 
