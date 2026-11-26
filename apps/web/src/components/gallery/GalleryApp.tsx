@@ -50,6 +50,7 @@ function formatDate(value: string) {
 export default function GalleryApp() {
   const [items, setItems] = useState<MediaItem[]>([]);
   const [page, setPage] = useState(1);
+  const [pageInput, setPageInput] = useState("1");
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState<number | null>(null);
   const [search, setSearch] = useState("");
@@ -69,6 +70,7 @@ export default function GalleryApp() {
     const result = await response.json() as GalleryResponse;
     setItems(result.items);
     setPage(result.page);
+    setPageInput(String(result.page));
     setHasMore(result.hasMore);
     setTotal(result.total);
     setFavoriteIds(new Set(result.items.filter((item) => item.isFavorite).map((item) => item.id)));
@@ -136,12 +138,23 @@ export default function GalleryApp() {
   const title = useMemo(() => active?.display_name || active?.filename || "", [active]);
 
   async function changePage(nextPage: number) {
+    const maxPage = Math.max(1, Math.ceil((total ?? 0) / 10));
+    const safePage = Math.max(1, Math.min(maxPage, Math.trunc(nextPage) || 1));
     try {
-      await loadPage(nextPage, search, activeView);
+      await loadPage(safePage, search, activeView);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Ошибка загрузки страницы.");
     }
   }
+
+  useEffect(() => {
+    if (!active) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setActive(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active]);
 
   async function selectView(view: typeof activeView) {
     setActiveView(view);
@@ -254,7 +267,7 @@ export default function GalleryApp() {
               <div className="media-meta"><div><strong>{item.display_name || item.filename}</strong><small>{formatDate(item.uploaded_at)} · {formatSize(item.size_bytes)}</small></div><button className={favoriteIds.has(item.id) ? "mini-action selected" : "mini-action"} type="button" aria-label="В избранное" onClick={() => void toggleFavorite(item)}>♡</button></div>
             </article>)}
           </div>}
-          {status === "ready" && items.length > 0 && <div className="pagination"><button className="secondary-button" disabled={page <= 1} onClick={() => void changePage(page - 1)}>Назад</button><span>Страница {page}{total !== null ? ` · ${total} файлов` : ""}</span><button className="secondary-button" disabled={!hasMore} onClick={() => void changePage(page + 1)}>Дальше</button></div>}
+          {status === "ready" && items.length > 0 && <div className="pagination"><button className="secondary-button" disabled={page <= 1} onClick={() => void changePage(page - 1)}>Назад</button><label className="page-jump">Страница <input aria-label="Номер страницы" inputMode="numeric" type="number" min="1" max={Math.max(1, Math.ceil((total ?? 0) / 10))} value={pageInput} onChange={(event) => setPageInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void changePage(Number(pageInput)); }} onBlur={() => setPageInput(String(page))} /><span>{total !== null ? `из ${Math.max(1, Math.ceil(total / 10))} · ${total} файлов` : ""}</span></label><button className="secondary-button" disabled={!hasMore} onClick={() => void changePage(page + 1)}>Дальше</button><button className="secondary-button" onClick={() => void changePage(Number(pageInput))}>Перейти</button></div>}
           <footer className="footer-note">Приватный архив · Доступ только владельцу</footer>
         </div>
       </section>
@@ -264,7 +277,7 @@ export default function GalleryApp() {
           <header className="viewer-header"><div><strong>{title}</strong><small>{formatSize(active.size_bytes)} · {formatDate(active.uploaded_at)}</small></div><button className="viewer-close" type="button" onClick={() => setActive(null)} aria-label="Закрыть">×</button></header>
           <div className="viewer-stage">
             {viewerLoading && <span className="loader" />}
-            {!viewerLoading && viewerFile && active.media_type === "video" && <video src={viewerFile.url} controls autoPlay playsInline />}
+            {!viewerLoading && viewerFile && active.media_type === "video" && <video src={viewerFile.url} controls playsInline preload="metadata" />}
             {!viewerLoading && viewerFile && active.media_type !== "video" && <Image src={viewerFile.url} alt={title} width={1600} height={1200} unoptimized style={{ width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />}
             {!viewerLoading && !viewerFile && <p>Не удалось загрузить оригинал.</p>}
           </div>
