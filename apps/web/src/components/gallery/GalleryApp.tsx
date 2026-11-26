@@ -13,6 +13,7 @@ type MediaItem = {
   mime_type: string;
   size_bytes: number;
   uploaded_at: string;
+  original_created_at: string | null;
   duration_ms: number | null;
   width: number | null;
   height: number | null;
@@ -64,6 +65,11 @@ export default function GalleryApp() {
   const [collections, setCollections] = useState<CollectionItem[]>([]);
   const [mediaCollectionIds, setMediaCollectionIds] = useState<string[]>([]);
   const [collectionsSaving, setCollectionsSaving] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editDate, setEditDate] = useState("");
+  const [metadataSaving, setMetadataSaving] = useState(false);
   const [activeView, setActiveView] = useState<"all" | "recent" | "favorites" | "videos" | "gifs" | "photos" | "trash">("all");
   const viewTitles = { all: "Все медиа", recent: "Недавно добавленные", favorites: "Избранное", videos: "Видео", gifs: "GIF", photos: "Фото", trash: "Корзина" };
 
@@ -140,6 +146,13 @@ export default function GalleryApp() {
   }, [active]);
 
   const title = useMemo(() => active?.display_name || active?.filename || "", [active]);
+
+  useEffect(() => {
+    setEditing(false);
+    setEditName(active?.display_name ?? "");
+    setEditDescription(active?.description ?? "");
+    setEditDate(active?.original_created_at ? active.original_created_at.slice(0, 10) : "");
+  }, [active]);
 
   async function changePage(nextPage: number) {
     const maxPage = Math.max(1, Math.ceil((total ?? 0) / 10));
@@ -220,6 +233,32 @@ export default function GalleryApp() {
     setActive(null);
     try { await loadPage(1, "", view); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Ошибка загрузки раздела."); }
+  }
+
+  async function saveMetadata() {
+    if (!active) return;
+    setMetadataSaving(true);
+    try {
+      const response = await fetch("/api/media/" + active.id, {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          display_name: editName.trim() || null,
+          description: editDescription.trim() || null,
+          original_created_at: editDate ? new Date(editDate + "T12:00:00").toISOString() : null,
+        }),
+      });
+      const result = await response.json() as { item?: { display_name: string | null; description: string | null; original_created_at: string | null }; error?: string };
+      if (!response.ok || !result.item) throw new Error(result.error ?? "Не удалось сохранить изменения.");
+      const updated = { ...active, ...result.item };
+      setActive(updated);
+      setItems((current) => current.map((item) => item.id === active.id ? updated : item));
+      setEditing(false);
+      setMessage("Изменения сохранены.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Ошибка сохранения.");
+    } finally {
+      setMetadataSaving(false);
+    }
   }
 
   async function toggleFavorite(item: MediaItem) {
@@ -341,8 +380,9 @@ export default function GalleryApp() {
             {!viewerLoading && viewerFile && active.media_type !== "video" && <Image src={viewerFile.url} alt={title} width={1600} height={1200} unoptimized style={{ width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />}
             {!viewerLoading && !viewerFile && <p>Не удалось загрузить оригинал.</p>}
           </div>
+          {editing && <div className="viewer-edit"><label>Название<input value={editName} maxLength={240} onChange={(event) => setEditName(event.target.value)} placeholder={active.filename} /></label><label>Описание<textarea value={editDescription} maxLength={10000} onChange={(event) => setEditDescription(event.target.value)} placeholder="Описание файла" /></label><label>Дата создания<input type="date" value={editDate} onChange={(event) => setEditDate(event.target.value)} /></label><div><button className="secondary-button" type="button" disabled={metadataSaving} onClick={() => void saveMetadata()}>{metadataSaving ? "Сохранение…" : "Сохранить изменения"}</button><button className="secondary-button" type="button" onClick={() => setEditing(false)}>Отмена</button></div></div>}
           <div className="viewer-collections"><strong>Коллекции</strong>{collections.length === 0 && <span className="collection-empty">Коллекций пока нет</span>}{collections.map((collection) => <label key={collection.id} className="collection-check"><input type="checkbox" checked={mediaCollectionIds.includes(collection.id)} onChange={(event) => setMediaCollectionIds((current) => event.target.checked ? [...current, collection.id] : current.filter((id) => id !== collection.id))} /><span>{collection.name}</span></label>)}<button className="secondary-button" type="button" disabled={collectionsSaving} onClick={() => void saveMediaCollections()}>{collectionsSaving ? "Сохранение…" : "Сохранить коллекции"}</button></div>
-          <footer className="viewer-footer"><a className="secondary-button" href={viewerFile?.url ?? "#"} download={active.filename} aria-disabled={!viewerFile}>Скачать оригинал</a><button className="secondary-button" type="button" onClick={() => void toggleFavorite(active)}>{favoriteIds.has(active.id) ? "Убрать из избранного" : "В избранное"}</button>{activeView === "trash" ? <><button className="secondary-button" type="button" onClick={() => void restoreItem(active)}>Восстановить</button><button className="danger-button" type="button" onClick={() => void permanentlyDelete(active)}>Удалить навсегда</button></> : <button className="danger-button" type="button" onClick={() => void moveToTrash(active)}>В корзину</button>}</footer>
+          <footer className="viewer-footer"><button className="secondary-button" type="button" onClick={() => setEditing((current) => !current)}>{editing ? "Закрыть редактирование" : "Изменить сведения"}</button><a className="secondary-button" href={viewerFile?.url ?? "#"} download={active.filename} aria-disabled={!viewerFile}>Скачать оригинал</a><button className="secondary-button" type="button" onClick={() => void toggleFavorite(active)}>{favoriteIds.has(active.id) ? "Убрать из избранного" : "В избранное"}</button>{activeView === "trash" ? <><button className="secondary-button" type="button" onClick={() => void restoreItem(active)}>Восстановить</button><button className="danger-button" type="button" onClick={() => void permanentlyDelete(active)}>Удалить навсегда</button></> : <button className="danger-button" type="button" onClick={() => void moveToTrash(active)}>В корзину</button>}</footer>
         </section>
       </div>}
       {message && status !== "error" && <div className="toast" role="status">{message}<button type="button" onClick={() => setMessage("")}>×</button></div>}
