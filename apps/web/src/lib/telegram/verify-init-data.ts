@@ -17,7 +17,7 @@ type VerifiedTelegramData = {
 export function verifyTelegramInitData(
   initData: string,
   botToken: string,
-  maxAgeSeconds = 86_400,
+  maxAgeSeconds = 600,
 ): VerifiedTelegramData | null {
   if (!initData || initData.length > 10_000) return null;
 
