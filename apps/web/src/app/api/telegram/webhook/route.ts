@@ -152,6 +152,10 @@ export async function POST(request: Request) {
             job_type: "send_archive", telegram_update_id: update.update_id, telegram_chat_id: message.chat.id,
             payload: { requested_by: message.from.id, delivery_mode: "ask" },
           }).select("id").single();
+          if (error?.code === "23505") {
+            await sendTelegramMessage(token, message.chat.id, "Эта команда отправки уже была обработана.");
+            return NextResponse.json({ ok: true });
+          }
           if (error || !queued) throw new Error("Could not enqueue archive delivery");
           await sendTelegramMessage(token, message.chat.id, "Выберите формат отправки всего архива:", {
             inline_keyboard: [[
