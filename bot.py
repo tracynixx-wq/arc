@@ -976,7 +976,7 @@ async def on_message(m: Message):
         saved = await db_add(uid, section, kind, file_id, unique_id, thumb_file_id, file_name)
         if saved:
             # Telegram normally supplies video thumbnails; generate one asynchronously if absent.
-            if not thumb_file_id and kind in ("video", "video_note", "animation"):
+            if kind in ("video", "video_note", "animation"):
                 task = asyncio.create_task(
                     generate_and_attach_thumbnail(uid, file_id, unique_id)
                 )
