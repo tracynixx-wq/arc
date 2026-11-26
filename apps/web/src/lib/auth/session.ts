@@ -20,7 +20,7 @@ export async function getOwnerSession() {
     .is("revoked_at", null)
     .maybeSingle();
 
-  if (error || !data) return null;
+  if (error || !data || !process.env.TELEGRAM_OWNER_ID || String(data.telegram_user_id) !== process.env.TELEGRAM_OWNER_ID) return null;
 
   await supabase.from("sessions").update({ last_seen_at: new Date().toISOString() }).eq("id", data.id);
   return { sessionId: data.id, telegramUserId: data.telegram_user_id };
