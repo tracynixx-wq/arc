@@ -57,7 +57,9 @@ export default function GalleryApp() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [zipBusy, setZipBusy] = useState(false);
+  const [zoom, setZoom] = useState(1);
   const requestVersion = useRef(0);
+  const viewerStageRef = useRef<HTMLDivElement>(null);
   const [page, setPage] = useState(1);
   const [pageInput, setPageInput] = useState("1");
   const [hasMore, setHasMore] = useState(false);
@@ -164,6 +166,7 @@ export default function GalleryApp() {
   }, [active]);
 
   const title = useMemo(() => active?.display_name || active?.filename || "", [active]);
+  const activeIndex = active ? items.findIndex((item) => item.id === active.id) : -1;
   const currentTitle = activeCollectionId ? (collections.find((item) => item.id === activeCollectionId)?.name ?? "Коллекция") : activeTagId ? ("#" + (tags.find((item) => item.id === activeTagId)?.name ?? "Тег")) : viewTitles[activeView];
 
   async function changePage(nextPage: number) {
@@ -288,10 +291,16 @@ export default function GalleryApp() {
     if (!active) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setActive(null);
+      if (event.key === "ArrowLeft" && activeIndex > 0) {
+        setViewerFile(null); setViewerLoading(true); setZoom(1); setActive(items[activeIndex - 1]);
+      }
+      if (event.key === "ArrowRight" && activeIndex >= 0 && activeIndex < items.length - 1) {
+        setViewerFile(null); setViewerLoading(true); setZoom(1); setActive(items[activeIndex + 1]);
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [active]);
+  }, [active, activeIndex, items]);
 
   async function selectView(view: typeof activeView) {
     setSelectedIds(new Set());
@@ -518,6 +527,7 @@ export default function GalleryApp() {
 
   async function openItem(item: MediaItem) {
     setEditing(false);
+    setZoom(1);
     setMediaCollectionIds([]);
     setMediaTagIds([]);
     setViewerFile(null);
@@ -592,12 +602,13 @@ export default function GalleryApp() {
       {selectedIds.size > 0 && <div className="bulk-toolbar"><strong>Выбрано: {selectedIds.size}</strong><button className="secondary-button" type="button" disabled={zipBusy || bulkBusy} onClick={() => void downloadZip()}>{zipBusy ? "Сборка ZIP…" : "Скачать ZIP"}</button><button className="secondary-button" type="button" disabled={bulkBusy} onClick={() => void runBulkAction(activeView === "trash" ? "restore" : "favorite")}>{activeView === "trash" ? "Восстановить" : "В избранное"}</button>{activeView === "favorites" && <button className="secondary-button" type="button" disabled={bulkBusy} onClick={() => void runBulkAction("unfavorite")}>Убрать из избранного</button>}{activeView !== "trash" && <button className="danger-button" type="button" disabled={bulkBusy} onClick={() => void runBulkAction("trash")}>В корзину</button>}<button className="secondary-button" type="button" disabled={bulkBusy} onClick={() => setSelectedIds(new Set())}>Снять выбор</button></div>}
       {active && <div className="viewer-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setActive(null); }}>
         <section className="viewer" role="dialog" aria-modal="true" aria-label="Просмотр медиа">
-          <header className="viewer-header"><div><strong>{title}</strong><small>{formatSize(active.size_bytes)} · {formatDate(active.uploaded_at)}</small></div><button className="viewer-close" type="button" onClick={() => setActive(null)} aria-label="Закрыть">×</button></header>
-          <div className="viewer-stage">
+          <header className="viewer-header"><div><strong>{title}</strong><small>{formatSize(active.size_bytes)} · {formatDate(active.uploaded_at)}</small></div><div className="viewer-nav"><button type="button" className="secondary-button" disabled={activeIndex <= 0} onClick={() => { setViewerFile(null); setViewerLoading(true); setZoom(1); setActive(items[activeIndex - 1]); }}>‹</button><button type="button" className="secondary-button" disabled={activeIndex < 0 || activeIndex >= items.length - 1} onClick={() => { setViewerFile(null); setViewerLoading(true); setZoom(1); setActive(items[activeIndex + 1]); }}>›</button><button type="button" className="secondary-button" onClick={() => { const stage = viewerStageRef.current; if (stage?.requestFullscreen) void stage.requestFullscreen(); }}>На весь экран</button></div><button className="viewer-close" type="button" onClick={() => setActive(null)} aria-label="Закрыть">×</button></header>
+          <div className="viewer-stage" ref={viewerStageRef}>
             {viewerLoading && <span className="loader" />}
             {!viewerLoading && viewerFile && active.media_type === "video" && <video src={viewerFile.url} controls playsInline preload="metadata" />}
-            {!viewerLoading && viewerFile && active.media_type !== "video" && <Image src={viewerFile.url} alt={title} width={1600} height={1200} unoptimized style={{ width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />}
+            {!viewerLoading && viewerFile && active.media_type !== "video" && <Image src={viewerFile.url} alt={title} width={1600} height={1200} unoptimized style={{ width: "auto", height: "auto", maxWidth: "100%", maxHeight: "100%", objectFit: "contain", transform: "scale(" + zoom + ")" }} />}
             {!viewerLoading && !viewerFile && <p>Не удалось загрузить оригинал.</p>}
+            {!viewerLoading && viewerFile && active.media_type !== "video" && <div className="viewer-zoom"><button type="button" onClick={() => setZoom((value) => Math.max(0.5, value - 0.25))}>−</button><span>{Math.round(zoom * 100)}%</span><button type="button" onClick={() => setZoom((value) => Math.min(3, value + 0.25))}>＋</button><button type="button" onClick={() => setZoom(1)}>Сброс</button></div>}
           </div>
           {editing && <div className="viewer-edit"><label>Название<input value={editName} maxLength={240} onChange={(event) => setEditName(event.target.value)} placeholder={active.filename} /></label><label>Описание<textarea value={editDescription} maxLength={10000} onChange={(event) => setEditDescription(event.target.value)} placeholder="Описание файла" /></label><label>Дата создания<input type="date" value={editDate} onChange={(event) => setEditDate(event.target.value)} /></label><div><button className="secondary-button" type="button" disabled={metadataSaving} onClick={() => void saveMetadata()}>{metadataSaving ? "Сохранение…" : "Сохранить изменения"}</button><button className="secondary-button" type="button" onClick={() => setEditing(false)}>Отмена</button></div></div>}
           <div className="viewer-tags"><strong>Теги</strong><div className="tag-list">{tags.map((tag) => <label key={tag.id} className="tag-check"><input type="checkbox" checked={mediaTagIds.includes(tag.id)} onChange={(event) => setMediaTagIds((current) => event.target.checked ? [...current, tag.id] : current.filter((id) => id !== tag.id))} /><span>{tag.name}</span></label>)}</div><div className="tag-create"><input aria-label="Новый тег" value={tagName} maxLength={40} onChange={(event) => setTagName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createTag(); }} placeholder="Создать тег…" /><button className="secondary-button" type="button" onClick={() => void createTag()}>Добавить</button><button className="secondary-button" type="button" disabled={tagsSaving} onClick={() => void saveMediaTags()}>{tagsSaving ? "Сохранение…" : "Сохранить теги"}</button></div></div>
