@@ -425,8 +425,9 @@ async def api_media_file(request):
     cached = media_cache.get(cache_key)
     payload = None
     kind = None
+    file_name = ""
     if cached and time.monotonic() - cached[0] < MEDIA_CACHE_TTL:
-        _, payload, kind = cached
+        _, payload, kind, file_name = cached
         media_cache.move_to_end(cache_key)
     else:
         if cached:
@@ -441,11 +442,12 @@ async def api_media_file(request):
         if not rows:
             return await api_json_error("File not found", 404)
         kind = rows[0]["kind"]
+        file_name = rows[0].get("file_name") or ""
         async with media_download_slots:
             # Another request may have populated the cache while this one waited.
             cached = media_cache.get(cache_key)
             if cached and time.monotonic() - cached[0] < MEDIA_CACHE_TTL:
-                _, payload, kind = cached
+                _, payload, kind, file_name = cached
                 media_cache.move_to_end(cache_key)
             else:
                 last_error = None
@@ -481,13 +483,12 @@ async def api_media_file(request):
                         "Не удалось получить файл из Telegram. Попробуй обновить страницу.", 502
                     )
                 if len(payload) <= MEDIA_CACHE_MAX:
-                    media_cache[cache_key] = (time.monotonic(), payload, kind)
+                    media_cache[cache_key] = (time.monotonic(), payload, kind, file_name)
                     media_cache_bytes += len(payload)
                     while media_cache_bytes > MEDIA_CACHE_MAX and media_cache:
                         _, evicted = media_cache.popitem(last=False)
                         media_cache_bytes -= len(evicted[1])
 
-    file_name = rows[0].get("file_name") or "" if "rows" in locals() else ""
     guessed_type = mimetypes.guess_type(file_name)[0] if file_name else None
     content_type = {
         "photo": "image/jpeg", "video": "video/mp4",
