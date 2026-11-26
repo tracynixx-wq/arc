@@ -152,13 +152,6 @@ export default function GalleryApp() {
 
   const title = useMemo(() => active?.display_name || active?.filename || "", [active]);
 
-  useEffect(() => {
-    setEditing(false);
-    setEditName(active?.display_name ?? "");
-    setEditDescription(active?.description ?? "");
-    setEditDate(active?.original_created_at ? active.original_created_at.slice(0, 10) : "");
-  }, [active]);
-
   async function changePage(nextPage: number) {
     const maxPage = Math.max(1, Math.ceil((total ?? 0) / 10));
     const safePage = Math.max(1, Math.min(maxPage, Math.trunc(nextPage) || 1));
@@ -183,7 +176,7 @@ export default function GalleryApp() {
   }, [status]);
 
   useEffect(() => {
-    if (!active) { setMediaCollectionIds([]); return; }
+    if (!active) return;
     let alive = true;
     fetch("/api/media/" + active.id + "/collections", { cache: "no-store" })
       .then(async (response) => {
@@ -237,7 +230,7 @@ export default function GalleryApp() {
   }, [status]);
 
   useEffect(() => {
-    if (!active) { setMediaTagIds([]); return; }
+    if (!active) return;
     let alive = true;
     fetch("/api/media/" + active.id + "/tags", { cache: "no-store" })
       .then(async (response) => {
@@ -292,6 +285,14 @@ export default function GalleryApp() {
     setActive(null);
     try { await loadPage(1, "", view); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Ошибка загрузки раздела."); }
+  }
+
+  function startEditing() {
+    if (!active) return;
+    setEditName(active.display_name ?? "");
+    setEditDescription(active.description ?? "");
+    setEditDate(active.original_created_at ? active.original_created_at.slice(0, 10) : "");
+    setEditing(true);
   }
 
   async function saveMetadata() {
@@ -363,6 +364,9 @@ export default function GalleryApp() {
   }
 
   async function openItem(item: MediaItem) {
+    setEditing(false);
+    setMediaCollectionIds([]);
+    setMediaTagIds([]);
     setViewerFile(null);
     setViewerLoading(true);
     setActive(item);
@@ -442,7 +446,7 @@ export default function GalleryApp() {
           {editing && <div className="viewer-edit"><label>Название<input value={editName} maxLength={240} onChange={(event) => setEditName(event.target.value)} placeholder={active.filename} /></label><label>Описание<textarea value={editDescription} maxLength={10000} onChange={(event) => setEditDescription(event.target.value)} placeholder="Описание файла" /></label><label>Дата создания<input type="date" value={editDate} onChange={(event) => setEditDate(event.target.value)} /></label><div><button className="secondary-button" type="button" disabled={metadataSaving} onClick={() => void saveMetadata()}>{metadataSaving ? "Сохранение…" : "Сохранить изменения"}</button><button className="secondary-button" type="button" onClick={() => setEditing(false)}>Отмена</button></div></div>}
           <div className="viewer-tags"><strong>Теги</strong><div className="tag-list">{tags.map((tag) => <label key={tag.id} className="tag-check"><input type="checkbox" checked={mediaTagIds.includes(tag.id)} onChange={(event) => setMediaTagIds((current) => event.target.checked ? [...current, tag.id] : current.filter((id) => id !== tag.id))} /><span>{tag.name}</span></label>)}</div><div className="tag-create"><input aria-label="Новый тег" value={tagName} maxLength={40} onChange={(event) => setTagName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void createTag(); }} placeholder="Создать тег…" /><button className="secondary-button" type="button" onClick={() => void createTag()}>Добавить</button><button className="secondary-button" type="button" disabled={tagsSaving} onClick={() => void saveMediaTags()}>{tagsSaving ? "Сохранение…" : "Сохранить теги"}</button></div></div>
           <div className="viewer-collections"><strong>Коллекции</strong>{collections.length === 0 && <span className="collection-empty">Коллекций пока нет</span>}{collections.map((collection) => <label key={collection.id} className="collection-check"><input type="checkbox" checked={mediaCollectionIds.includes(collection.id)} onChange={(event) => setMediaCollectionIds((current) => event.target.checked ? [...current, collection.id] : current.filter((id) => id !== collection.id))} /><span>{collection.name}</span></label>)}<button className="secondary-button" type="button" disabled={collectionsSaving} onClick={() => void saveMediaCollections()}>{collectionsSaving ? "Сохранение…" : "Сохранить коллекции"}</button></div>
-          <footer className="viewer-footer"><button className="secondary-button" type="button" onClick={() => setEditing((current) => !current)}>{editing ? "Закрыть редактирование" : "Изменить сведения"}</button><a className="secondary-button" href={viewerFile?.url ?? "#"} download={active.filename} aria-disabled={!viewerFile}>Скачать оригинал</a><button className="secondary-button" type="button" onClick={() => void toggleFavorite(active)}>{favoriteIds.has(active.id) ? "Убрать из избранного" : "В избранное"}</button>{activeView === "trash" ? <><button className="secondary-button" type="button" onClick={() => void restoreItem(active)}>Восстановить</button><button className="danger-button" type="button" onClick={() => void permanentlyDelete(active)}>Удалить навсегда</button></> : <button className="danger-button" type="button" onClick={() => void moveToTrash(active)}>В корзину</button>}</footer>
+          <footer className="viewer-footer"><button className="secondary-button" type="button" onClick={() => editing ? setEditing(false) : startEditing()}>{editing ? "Закрыть редактирование" : "Изменить сведения"}</button><a className="secondary-button" href={viewerFile?.url ?? "#"} download={active.filename} aria-disabled={!viewerFile}>Скачать оригинал</a><button className="secondary-button" type="button" onClick={() => void toggleFavorite(active)}>{favoriteIds.has(active.id) ? "Убрать из избранного" : "В избранное"}</button>{activeView === "trash" ? <><button className="secondary-button" type="button" onClick={() => void restoreItem(active)}>Восстановить</button><button className="danger-button" type="button" onClick={() => void permanentlyDelete(active)}>Удалить навсегда</button></> : <button className="danger-button" type="button" onClick={() => void moveToTrash(active)}>В корзину</button>}</footer>
         </section>
       </div>}
       {message && status !== "error" && <div className="toast" role="status">{message}<button type="button" onClick={() => setMessage("")}>×</button></div>}
