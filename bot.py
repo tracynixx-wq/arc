@@ -818,6 +818,7 @@ async def _send_all_media_job(uid):
             job["total"] = await db_count_all(uid)
         for row in rows:
             row_id = row["id"]
+            kind = row.get("kind") or "document"
             name = (row.get("file_name") or f"arc-{row_id}").replace("/", "_").replace("\\\\", "_")[:120]
             job["current"] = name
             try:
@@ -841,15 +842,28 @@ async def _send_all_media_job(uid):
                     raise RuntimeError("файл пустой")
                 if len(payload) > 50 * 1024 * 1024:
                     raise RuntimeError("превышен лимит отправки Telegram Bot API (50 МиБ)")
-                sent_file = BufferedInputFile(payload, filename=name)
+
+                media = BufferedInputFile(payload, filename=name)
+                mime_type = mimetypes.guess_type(name)[0] or ""
+                if kind == "video_note":
+                    send_method, media_arg = bot.send_video_note, "video_note"
+                elif kind == "animation" or mime_type == "image/gif":
+                    send_method, media_arg = bot.send_animation, "animation"
+                elif kind == "photo" or mime_type.startswith("image/"):
+                    send_method, media_arg = bot.send_photo, "photo"
+                elif kind == "video" or mime_type.startswith("video/"):
+                    send_method, media_arg = bot.send_video, "video"
+                else:
+                    send_method, media_arg = bot.send_document, "document"
+
                 while True:
                     try:
-                        await bot.send_document(chat_id=uid, document=sent_file,
-                                                disable_notification=True)
+                        await send_method(chat_id=uid, **{media_arg: media},
+                                          disable_notification=True)
                         break
                     except TelegramRetryAfter as exc:
                         await asyncio.sleep(max(1, int(exc.retry_after)) + 1)
-                        sent_file = BufferedInputFile(payload, filename=name)
+                        media = BufferedInputFile(payload, filename=name)
                 job["sent"] += 1
             except Exception as exc:
                 job["failed"] += 1
@@ -866,7 +880,6 @@ async def _send_all_media_job(uid):
     job["current"] = ""
     logging.info("Send-all completed user=%s sent=%s failed=%s total=%s",
                  uid, job["sent"], job["failed"], job["total"])
-
 
 async def db_count_all(uid):
     async with session.get(
