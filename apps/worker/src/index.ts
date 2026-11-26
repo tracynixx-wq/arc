@@ -140,15 +140,16 @@ async function verifyStorageObject(bucket: string, objectKey: string) {
   }
 }
 
-async function telegramCall(method: string, body: Record<string, unknown>) {
+async function telegramCall(method: string, body: Record<string, unknown>): Promise<{ message_id?: number }> {
   const response = await fetch(`${telegramApiBase}/bot${telegramToken}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
     cache: "no-store",
   });
-  const result = await response.json() as { ok?: boolean; description?: string };
+  const result = await response.json() as { ok?: boolean; description?: string; result?: { message_id?: number } };
   if (!response.ok || !result.ok) throw new Error(result.description ?? `Telegram ${method} failed`);
+  return result.result ?? {};
 }
 
 async function deleteSourceMessage(chatId: number | null, messageId: number | null, mediaId: string) {
@@ -195,7 +196,9 @@ async function retryTelegramJob(job: TelegramJob, error: unknown) {
     try {
       await telegramCall("sendMessage", {
         chat_id: job.telegram_chat_id,
-        text: "ARC не смог сохранить файл после нескольких попыток. Оригинальное сообщение оставлено в чате; подробности записаны в журнал.",
+        text: job.job_type === "send_archive"
+          ? "ARC не смог завершить отправку архива после нескольких попыток. Отправленные файлы сохранены в истории; повторный запуск пропустит подтверждённые отправки."
+          : "ARC не смог сохранить файл после нескольких попыток. Оригинальное сообщение оставлено в чате; подробности записаны в журнал.",
       });
     } catch {
       // The durable job error remains available even if Telegram notification fails.
@@ -455,20 +458,146 @@ async function processCover(job: ProcessingJob) {
   }
 }
 
+async function processArchiveDelivery(job: TelegramJob) {
+  const chatId = job.telegram_chat_id;
+  const mode = job.payload.delivery_mode;
+  if (!chatId || (mode !== "native" && mode !== "document")) throw new Error("Archive delivery has no valid destination or format.");
+
+  const { count: total, error: countError } = await supabase.from("media").select("id", { count: "exact", head: true })
+    .eq("is_trashed", false).is("purged_at", null);
+  if (countError) throw countError;
+  let sent = 0;
+  let failed = 0;
+  let skipped = 0;
+  let offset = 0;
+  const pageSize = 100;
+  let cancelled = false;
+
+  await telegramCall("sendMessage", { chat_id: chatId, text: "ARC: начинаю отправку архива. Подтверждённые ранее файлы будут пропущены." });
+
+  while (true) {
+    const { data: mediaPage, error: mediaError } = await supabase.from("media")
+      .select("id,filename,media_type,mime_type")
+      .eq("is_trashed", false).is("purged_at", null)
+      .order("uploaded_at", { ascending: true }).order("id", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+    if (mediaError) throw mediaError;
+    const batch = mediaPage ?? [];
+    if (!batch.length) break;
+
+    const ids = batch.map((item) => item.id);
+    const { data: deliveries, error: deliveryReadError } = await supabase.from("telegram_deliveries")
+      .select("media_id,status").eq("telegram_chat_id", chatId).in("media_id", ids);
+    if (deliveryReadError) throw deliveryReadError;
+    const alreadySent = new Set((deliveries ?? []).filter((item) => item.status === "sent").map((item) => item.media_id));
+
+    for (const item of batch) {
+      const { data: currentJob, error: currentJobError } = await supabase.from("telegram_jobs").select("status").eq("id", job.id).maybeSingle();
+      if (currentJobError) throw currentJobError;
+      if (currentJob?.status === "cancelled") { cancelled = true; break; }
+
+      if (alreadySent.has(item.id)) { skipped += 1; continue; }
+
+      try {
+        const { data: original, error: originalError } = await supabase.from("media_files")
+          .select("storage_bucket,storage_key").eq("media_id", item.id)
+          .eq("file_role", "original").eq("is_current", true).maybeSingle();
+        if (originalError || !original) throw new Error("Verified original file is missing.");
+
+        const { data: signed, error: signedError } = await supabase.storage
+          .from(original.storage_bucket).createSignedUrl(original.storage_key, 3600);
+        if (signedError || !signed?.signedUrl) throw new Error("Could not create a temporary original URL.");
+
+        const method = mode === "document" ? "sendDocument"
+          : item.media_type === "photo" ? "sendPhoto"
+          : item.media_type === "video" ? "sendVideo"
+          : item.media_type === "gif" ? "sendAnimation"
+          : "sendDocument";
+        const field = method === "sendPhoto" ? "photo"
+          : method === "sendVideo" ? "video"
+          : method === "sendAnimation" ? "animation" : "document";
+        const telegramResult = await telegramCall(method, {
+          chat_id: chatId, [field]: signed.signedUrl, caption: item.filename,
+        });
+
+        const { error: saveDeliveryError } = await supabase.from("telegram_deliveries").upsert({
+          media_id: item.id,
+          telegram_chat_id: chatId,
+          telegram_message_id: telegramResult.message_id ?? null,
+          delivery_mode: mode,
+          status: "sent",
+          sent_at: new Date().toISOString(),
+          error: null,
+        }, { onConflict: "media_id,telegram_chat_id" });
+        if (saveDeliveryError) throw new Error("Telegram sent the file, but ARC could not record delivery confirmation: " + saveDeliveryError.message);
+        sent += 1;
+      } catch (error) {
+        failed += 1;
+        const message = error instanceof Error ? error.message : "Unknown Telegram delivery error";
+        await supabase.from("telegram_deliveries").upsert({
+          media_id: item.id,
+          telegram_chat_id: chatId,
+          delivery_mode: mode,
+          status: "failed",
+          error: { message },
+        }, { onConflict: "media_id,telegram_chat_id" });
+        await supabase.from("activity_logs").insert({
+          action: "telegram.archive_delivery_failed",
+          entity_type: "media",
+          entity_id: item.id,
+          details: { job_id: job.id, message },
+        });
+      }
+
+      if ((sent + failed + skipped) % 10 === 0) {
+        await telegramCall("sendMessage", {
+          chat_id: chatId,
+          text: "ARC: обработано " + (sent + failed + skipped) + " из " + (total ?? "?") +
+            ". Отправлено: " + sent + ", пропущено: " + skipped + ", ошибок: " + failed + ".",
+        }).catch(() => undefined);
+      }
+    }
+
+    if (cancelled || batch.length < pageSize) break;
+    offset += batch.length;
+  }
+
+  if (cancelled) {
+    await telegramCall("sendMessage", {
+      chat_id: chatId,
+      text: "Отправка остановлена. Уже отправленные файлы сохранены; повторный запуск пропустит подтверждённые отправки.",
+    }).catch(() => undefined);
+    await supabase.from("telegram_jobs").update({
+      status: "cancelled", finished_at: new Date().toISOString(),
+      locked_at: null, locked_by: null, heartbeat_at: null,
+    }).eq("id", job.id);
+    return;
+  }
+
+  await telegramCall("sendMessage", {
+    chat_id: chatId,
+    text: "ARC: отправка архива завершена.\nВсего в архиве: " + (total ?? 0) +
+      "\nОтправлено сейчас: " + sent + "\nУже было отправлено: " + skipped + "\nОшибок: " + failed,
+  });
+  const { error: finishError } = await supabase.from("telegram_jobs").update({
+    status: failed ? "failed" : "succeeded",
+    finished_at: new Date().toISOString(),
+    locked_at: null, locked_by: null, heartbeat_at: null,
+    error: failed ? { message: "Some media items could not be delivered.", failed_count: failed } : null,
+  }).eq("id", job.id);
+  if (finishError) throw finishError;
+}
+
 async function processTelegramJob(job: TelegramJob) {
   const heartbeat = setInterval(() => {
     void supabase.from("telegram_jobs").update({ heartbeat_at: new Date().toISOString() }).eq("id", job.id).eq("status", "running");
   }, 30_000);
   try {
-    if (job.job_type !== "ingest") {
-      // Archive delivery is handled by a separate queue consumer; keep it queued here.
-      await supabase.from("telegram_jobs").update({
-        status: "queued", attempts: Math.max(0, job.attempts - 1),
-        locked_at: null, locked_by: null, heartbeat_at: null,
-        available_at: new Date(Date.now() + 60_000).toISOString(),
-      }).eq("id", job.id);
+    if (job.job_type === "send_archive") {
+      await processArchiveDelivery(job);
       return;
     }
+    if (job.job_type !== "ingest") throw new Error("Unsupported Telegram job type: " + job.job_type);
     await processIngest(job);
   } catch (error) {
     await retryTelegramJob(job, error);
