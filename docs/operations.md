@@ -51,3 +51,8 @@ The isolated `arc-v1-foundation` branch contains the database schema, private me
 ## Backup status
 
 Independent backup execution is not enabled. Ingestion records `backup_status: not_configured` in media metadata and does not create endlessly retrying backup jobs. Configure and test an independent S3-compatible destination and restore procedure before treating originals as backed up. Do not infer backup protection from Supabase Storage alone.
+
+
+## ZIP export boundary
+
+The gallery currently supports browser-generated ZIP archives for selected files up to 40 MiB total. ZIP entries are flat, original filenames are preserved, collisions receive deterministic suffixes, and covers are excluded. Larger selections are refused rather than risking a browser tab crash. Background ZIP jobs, automatic browser/background routing and multi-part archive assembly remain unfinished.
