@@ -8,7 +8,7 @@ os.environ.setdefault("ADMIN_ID", "0")
 os.environ.setdefault("PASSWORD", "actions-original-storage")
 import bot as arc
 
-MAX_NEW_BYTES = int(os.getenv("MAX_NEW_BYTES", str(600 * 1024 * 1024)))
+MAX_NEW_BYTES = int(os.getenv("MAX_NEW_MIB", "600")) * 1024 * 1024
 PAGE_SIZE = 500
 
 async def fetch_rows():
@@ -31,15 +31,6 @@ async def fetch_rows():
         offset += PAGE_SIZE
     return rows
 
-async def existing_original_bytes():
-    query = "select coalesce(sum((metadata->>'size')::bigint),0) as bytes from storage.objects where bucket_id='arc-originals'"
-    async with arc.session.post(
-        f"{arc.SUPABASE_URL}/rest/v1/rpc/does_not_exist", json={}, headers=arc._headers()
-    ) as _:
-        pass
-    # Storage usage is also counted locally as successful objects are created in this run.
-    return 0
-
 async def main():
     timeout = aiohttp.ClientTimeout(total=180, connect=15, sock_read=150)
     connector = aiohttp.TCPConnector(limit=5, limit_per_host=3)
@@ -59,6 +50,7 @@ async def main():
                 tg_file = await arc.bot.get_file(row["file_id"], request_timeout=30)
                 size = int(tg_file.file_size or 0)
                 sizes[row["id"]] = size
+                await asyncio.sleep(0.15)
                 if size > 20 * 1024 * 1024:
                     oversized += 1
                 else:
