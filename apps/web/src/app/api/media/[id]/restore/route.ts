@@ -16,7 +16,7 @@ export async function POST(_request: Request, context: RouteContext) {
     const supabase = createSupabaseAdmin();
     const { data, error } = await supabase.from("media")
       .update({ is_trashed: false, trashed_at: null })
-      .eq("id", id).eq("is_trashed", true).select("id").maybeSingle();
+      .eq("id", id).eq("is_trashed", true).is("purged_at", null).select("id").maybeSingle();
 
     if (error) return NextResponse.json({ error: "Could not restore media." }, { status: 500 });
     if (!data) return NextResponse.json({ error: "Media not found in trash." }, { status: 404 });
