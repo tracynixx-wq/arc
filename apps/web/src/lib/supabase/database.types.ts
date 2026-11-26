@@ -647,6 +647,7 @@ export type Database = {
       telegram_jobs: {
         Row: {
           attempts: number
+          available_at: string
           created_at: string
           error: Json | null
           finished_at: string | null
@@ -669,6 +670,7 @@ export type Database = {
         }
         Insert: {
           attempts?: number
+          available_at?: string
           created_at?: string
           error?: Json | null
           finished_at?: string | null
@@ -691,6 +693,7 @@ export type Database = {
         }
         Update: {
           attempts?: number
+          available_at?: string
           created_at?: string
           error?: Json | null
           finished_at?: string | null
@@ -760,6 +763,7 @@ export type Database = {
         Args: { p_batch_size?: number; p_worker_id: string }
         Returns: {
           attempts: number
+          available_at: string
           created_at: string
           error: Json | null
           finished_at: string | null
