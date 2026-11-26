@@ -71,12 +71,18 @@ async def db_add(uid, section, kind, file_id, unique_id):
             "file_unique_id": unique_id,
         },
         headers=_headers(
-            {"Prefer": "resolution=ignore-duplicates,return=minimal"}
+            {"Prefer": "resolution=ignore-duplicates,return=representation"}
         ),
     ) as r:
         if r.status >= 300:
             logging.error("db_add %s %s", r.status, await r.text())
             return False
+        try:
+            inserted = await r.json()
+        except Exception:
+            inserted = []
+        if not inserted:
+            logging.info("Duplicate media ignored user=%s unique_id=%s", uid, unique_id)
         return True
 
 
