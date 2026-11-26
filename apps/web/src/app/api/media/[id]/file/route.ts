@@ -13,7 +13,9 @@ export async function GET(request: Request, context: RouteContext) {
 
     const { id } = await context.params;
     if (!UUID.test(id)) return NextResponse.json({ error: "Invalid media id." }, { status: 400 });
-    const role = new URL(request.url).searchParams.get("role") ?? "original";
+    const fileUrl = new URL(request.url);
+    const role = fileUrl.searchParams.get("role") ?? "original";
+    const download = fileUrl.searchParams.get("download") === "1";
     if (!["original", "cover"].includes(role)) return NextResponse.json({ error: "Invalid file role." }, { status: 400 });
 
     const supabase = createSupabaseAdmin();
@@ -25,7 +27,7 @@ export async function GET(request: Request, context: RouteContext) {
     if (!file) return NextResponse.json({ error: "File not found." }, { status: 404 });
 
     const { data: signed, error: signedError } = await supabase.storage
-      .from(file.storage_bucket).createSignedUrl(file.storage_key, 300, { download: false });
+      .from(file.storage_bucket).createSignedUrl(file.storage_key, 300, { download });
     if (signedError || !signed?.signedUrl) return NextResponse.json({ error: "Could not create secure file URL." }, { status: 500 });
 
     return NextResponse.json({ url: signed.signedUrl, mimeType: file.mime_type }, {
