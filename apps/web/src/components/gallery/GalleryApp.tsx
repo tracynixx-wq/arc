@@ -393,7 +393,7 @@ export default function GalleryApp() {
         throw new Error("Выбранный архив слишком велик для безопасной сборки в браузере. Фоновый ZIP-экспорт ещё не подключён.");
       }
 
-      const entries: Record<string, Uint8Array> = {};
+      const entries = Object.create(null) as Record<string, Uint8Array>;
       const usedNames = new Set<string>();
       for (const source of sources) {
         const response = await fetch(source.url, { cache: "no-store" });
