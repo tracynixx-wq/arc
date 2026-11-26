@@ -62,6 +62,7 @@ media_cache_bytes = 0
 MEDIA_CACHE_MAX = 48 * 1024 * 1024
 MEDIA_CACHE_TTL = 600
 media_download_slots = asyncio.Semaphore(4)
+thumbnail_processing_lock = asyncio.Lock()  # One FFmpeg job at a time on the 512 MiB instance.
 
 
 # ---------- Supabase ----------
@@ -302,7 +303,7 @@ async def make_thumbnail_from_image(uid, image_file_id, row_id):
         return None
 
 
-async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
+async def _make_thumbnail_unlocked(uid, file_id, row_id, *, backfill=False):
     """Create a short looping GIF from the actual source video and store it in Supabase."""
     try:
         tg_file = await bot.get_file(file_id, request_timeout=30)
@@ -319,6 +320,8 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
             tg_file.file_path, source, timeout=90, chunk_size=256 * 1024
         )
         media_bytes = source.getvalue()
+        source.close()
+        del source
         if not media_bytes or len(media_bytes) > 20 * 1024 * 1024:
             reason = "downloaded source is empty or exceeds the 20 MiB Bot API limit"
             await db_set_thumbnail_status(row_id, "failed", reason)
@@ -334,13 +337,15 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
             with tempfile.NamedTemporaryFile(prefix="arc-cover-", suffix=".media", delete=False) as tmp:
                 tmp.write(media_bytes)
                 temp_path = tmp.name
+            del media_bytes
             command = [
                 ffmpeg, "-hide_banner", "-loglevel", "error",
-                "-i", temp_path, "-t", "2.5", "-an",
+                "-threads", "1", "-filter_threads", "1", "-filter_complex_threads", "1",
+                "-ss", "0", "-t", "2.5", "-i", temp_path, "-an",
                 "-filter_complex",
-                "[0:v]fps=8,scale=320:-1:flags=lanczos,split[a][b];"
-                "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer",
-                "-loop", "0", "-f", "gif", "pipe:1",
+                "[0:v]fps=5,scale=240:-1:flags=fast_bilinear,split[a][b];"
+                "[a]palettegen=max_colors=96:stats_mode=diff[p];[b][p]paletteuse=dither=none",
+                "-loop", "0", "-threads", "1", "-fs", "4194304", "-f", "gif", "pipe:1",
             ]
             proc = await asyncio.create_subprocess_exec(
                 *command, stdout=asyncio.subprocess.PIPE,
@@ -382,6 +387,13 @@ async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
             message = "Telegram Bot API cannot download this source file because it exceeds its download limit"
         await db_set_thumbnail_status(row_id, "failed", message)
         return None
+
+
+async def make_thumbnail(uid, file_id, row_id, *, backfill=False):
+    # Backfill and live uploads share one low-memory FFmpeg slot.
+    async with thumbnail_processing_lock:
+        return await _make_thumbnail_unlocked(uid, file_id, row_id, backfill=backfill)
+
 
 async def generate_and_attach_thumbnail(uid, file_id, unique_id):
     try:
@@ -1100,21 +1112,35 @@ async def on_message(m: Message):
     # The bot is an upload-only endpoint: no password gate here.
     # Password protection remains enabled for the standalone website API.
     item = extract(m, uid)
-    if item:
-        section, kind, file_id, unique_id, thumb_file_id, file_name = item
-        saved = await db_add(uid, section, kind, file_id, unique_id, thumb_file_id, file_name)
-        if saved:
-            # Telegram normally supplies video thumbnails; generate one asynchronously if absent.
-            if kind in ("video", "video_note", "animation"):
-                task = asyncio.create_task(
-                    generate_and_attach_thumbnail(uid, file_id, unique_id)
-                )
-                thumbnail_tasks.add(task)
-                task.add_done_callback(thumbnail_tasks.discard)
-            await safe_delete(chat_id, m.message_id)
-        else:
-            logging.error("Media save failed; original message retained user=%s", uid)
+    if not item:
+        await safe_delete(chat_id, m.message_id)
         return
+
+    section, kind, file_id, unique_id, thumb_file_id, file_name = item
+    try:
+        saved = await db_add(uid, section, kind, file_id, unique_id, thumb_file_id, file_name)
+    except Exception:
+        logging.exception("Media save request crashed user=%s kind=%s", uid, kind)
+        await bot.send_message(chat_id, "❌ Не удалось сохранить файл. Попробуй отправить его ещё раз.")
+        return
+
+    if not saved:
+        logging.error("Media save failed; original message retained user=%s", uid)
+        await bot.send_message(chat_id, "❌ Не удалось сохранить файл в ARC. Исходное сообщение оставлено.")
+        return
+
+    # Acknowledge the database save before removing the incoming Telegram message.
+    try:
+        await bot.send_message(chat_id, "✅ Видео сохранено в ARC." if kind in ("video", "video_note") else "✅ Файл сохранён в ARC.")
+    except Exception:
+        logging.exception("Upload acknowledgement failed user=%s", uid)
+
+    # Cover generation is serialized separately and cannot block the upload itself.
+    if kind in ("video", "video_note", "animation"):
+        task = asyncio.create_task(generate_and_attach_thumbnail(uid, file_id, unique_id))
+        thumbnail_tasks.add(task)
+        task.add_done_callback(thumbnail_tasks.discard)
+
     await safe_delete(chat_id, m.message_id)
 
 
@@ -1190,7 +1216,7 @@ async def main():
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     asyncio.create_task(self_ping())
-    await bot.delete_webhook(drop_pending_updates=True)
+    await bot.delete_webhook(drop_pending_updates=False)
     asyncio.create_task(thumbnail_maintenance_loop())
     await dp.start_polling(bot)
 
