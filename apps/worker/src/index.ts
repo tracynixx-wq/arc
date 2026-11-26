@@ -215,6 +215,7 @@ async function processIngest(job: TelegramJob) {
     const downloaded = await downloadTelegramFile(fileId, localFile);
     const existing = await supabase.from("media").select("id")
       .eq("sha256", downloaded.sha256).is("purged_at", null).maybeSingle();
+    if (existing.error) throw new Error(`Duplicate check failed: ${existing.error.message}`);
     const mediaId = existing.data?.id ?? job.id;
 
     if (existing.data) {
@@ -388,7 +389,6 @@ async function processCover(job: ProcessingJob) {
 
   const tempDir = await mkdtemp(join(tmpdir(), "arc-cover-"));
   const inputPath = join(tempDir, `source${extname(original.storage_key) || ".bin"}`);
-  const palettePath = join(tempDir, "palette.png");
   const outputPath = join(tempDir, "cover.gif");
 
   try {
@@ -406,7 +406,6 @@ async function processCover(job: ProcessingJob) {
     const commonFilter = `fps=${fps},scale='min(720,iw)':-2:flags=lanczos`;
     const graph = `[0:v]${commonFilter},split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer`;
     const inputArgs = isVideo ? ["-t", "3", "-i", inputPath] : ["-i", inputPath];
-    await runCommand("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...inputArgs, "-vf", "null", "-frames:v", "1", palettePath]).catch(() => undefined);
     await runCommand("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...inputArgs, "-filter_complex", graph, "-loop", "0", outputPath]);
 
     const outputStat = await stat(outputPath);
@@ -416,9 +415,10 @@ async function processCover(job: ProcessingJob) {
     const outputStream = verified.streams?.[0];
     if (outputStream?.codec_name !== "gif") throw new Error("Generated preview is not a valid GIF.");
 
-    const { data: current } = await supabase.from("media_files").select("version_number")
-      .eq("media_id", job.media_id).eq("file_role", "cover").eq("is_current", true).maybeSingle();
-    const version = (current?.version_number ?? 0) + 1;
+    const { data: latestCover, error: versionError } = await supabase.from("media_files").select("version_number")
+      .eq("media_id", job.media_id).eq("file_role", "cover").order("version_number", { ascending: false }).limit(1).maybeSingle();
+    if (versionError) throw versionError;
+    const version = (latestCover?.version_number ?? 0) + 1;
     const objectKey = `${job.media_id}/cover-v${version}.gif`;
     await uploadTus(outputPath, "arc-covers", objectKey, "image/gif");
     await verifyStorageObject("arc-covers", objectKey);
@@ -439,15 +439,17 @@ async function processCover(job: ProcessingJob) {
     });
     if (insertError) throw insertError;
 
-    await supabase.from("media").update({
+    const { error: mediaUpdateError } = await supabase.from("media").update({
       processing_status: "ready",
       fps,
     }).eq("id", job.media_id);
+    if (mediaUpdateError) throw mediaUpdateError;
 
-    await supabase.from("processing_jobs").update({
+    const { error: jobUpdateError } = await supabase.from("processing_jobs").update({
       status: "succeeded", finished_at: new Date().toISOString(),
       locked_at: null, locked_by: null, heartbeat_at: null, error: null,
     }).eq("id", job.id);
+    if (jobUpdateError) throw jobUpdateError;
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
