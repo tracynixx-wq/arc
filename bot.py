@@ -69,7 +69,7 @@ def _headers(extra=None):
     return h
 
 
-async def db_add(uid, section, kind, file_id, unique_id):
+async def db_add(uid, section, kind, file_id, unique_id, thumb_file_id=None):
     async with session.post(
         f"{SUPABASE_URL}/rest/v1/media?on_conflict=user_id,file_unique_id",
         json={
@@ -78,6 +78,7 @@ async def db_add(uid, section, kind, file_id, unique_id):
             "kind": kind,
             "file_id": file_id,
             "file_unique_id": unique_id,
+            "thumb_file_id": thumb_file_id,
         },
         headers=_headers(
             {"Prefer": "resolution=ignore-duplicates,return=representation"}
@@ -149,7 +150,7 @@ async def clear_view(chat_id, uid, drop_panel=False):
 
 
 def extract(m: Message, uid: int):
-    """Returns (section, kind, file_id, unique_id) or None."""
+    """Returns (section, kind, file_id, unique_id, thumbnail_file_id) or None."""
     forced = mode.get(uid) == "leaks"
     if m.video_note:
         f, kind, sec = m.video_note, "video_note", "circles"
@@ -165,7 +166,9 @@ def extract(m: Message, uid: int):
         return None
     if forced:
         sec = "leaks"
-    return sec, kind, f.file_id, f.file_unique_id
+    thumb = getattr(f, "thumbnail", None)
+    thumb_file_id = thumb.file_id if thumb else (f.file_id if kind == "photo" else None)
+    return sec, kind, f.file_id, f.file_unique_id, thumb_file_id
 
 
 async def send_media(chat_id, kind, file_id, kb):
@@ -361,7 +364,7 @@ async def api_media(request):
         page = max(0, int(request.query.get("page", "0")))
     except ValueError:
         page = 0
-    url = (f"{SUPABASE_URL}/rest/v1/media?select=id,kind"
+    url = (f"{SUPABASE_URL}/rest/v1/media?select=id,kind,thumb_file_id"
            f"&user_id=eq.{uid}&section=eq.{section}"
            f"&order=id.desc&limit={PAGE_SIZE}&offset={page * PAGE_SIZE}")
     async with session.get(url, headers=_headers()) as r:
@@ -483,6 +486,38 @@ async def api_media_file(request):
     return web.Response(body=payload, content_type=content_type, headers=headers)
 
 
+async def api_media_cover(request):
+    data = api_auth(request)
+    if not data:
+        return web.json_response({"auth_required": True}, status=401)
+    uid, _ = data
+    row_id = request.match_info["row_id"]
+    url = (f"{SUPABASE_URL}/rest/v1/media?select=kind,file_id,thumb_file_id"
+           f"&id=eq.{row_id}&user_id=eq.{uid}")
+    async with session.get(url, headers=_headers()) as r:
+        if r.status >= 300:
+            return await api_json_error("Database error", 500)
+        rows = await r.json()
+    if not rows:
+        return await api_json_error("File not found", 404)
+    item = rows[0]
+    thumb_id = item.get("thumb_file_id")
+    if not thumb_id and item["kind"] == "photo":
+        thumb_id = item["file_id"]
+    if not thumb_id:
+        return await api_json_error("Для этого старого файла обложка не сохранена", 404)
+    try:
+        tg_file = await bot.get_file(thumb_id, request_timeout=20)
+        buffer = io.BytesIO()
+        await bot.download_file(tg_file.file_path, buffer, timeout=30)
+        body = buffer.getvalue()
+        return web.Response(body=body, content_type="image/jpeg",
+                            headers={"Cache-Control":"private, max-age=3600"})
+    except Exception:
+        logging.exception("Thumbnail fetch failed row=%s", row_id)
+        return await api_json_error("Не удалось загрузить обложку", 502)
+
+
 async def api_send_media(request):
     data = api_auth(request)
     if not data:
@@ -546,8 +581,8 @@ async def on_message(m: Message):
     # Password protection remains enabled for the Mini App API.
     item = extract(m, uid)
     if item:
-        section, kind, file_id, unique_id = item
-        saved = await db_add(uid, section, kind, file_id, unique_id)
+        section, kind, file_id, unique_id, thumb_file_id = item
+        saved = await db_add(uid, section, kind, file_id, unique_id, thumb_file_id)
         if saved:
             await safe_delete(chat_id, m.message_id)
         else:
@@ -613,6 +648,7 @@ async def main():
     app.router.add_get("/api/summary", api_summary)
     app.router.add_get("/api/media", api_media)
     app.router.add_get("/api/media/{row_id}/file", api_media_file)
+    app.router.add_get("/api/media/{row_id}/cover", api_media_cover)
     app.router.add_post("/api/media/{row_id}/send", api_send_media)
     app.router.add_delete("/api/media/{row_id}", api_delete_media)
     app.router.add_post("/api/mode", api_mode)
