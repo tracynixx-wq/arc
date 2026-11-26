@@ -638,7 +638,7 @@ async def site_login(request):
 
 async def site_logout(_):
     response = web.json_response({"ok": True})
-    response.del_cookie("arc_session", path="/api", secure=True, httponly=True, samesite="Strict")
+    response.del_cookie("arc_session", path="/api")
     return response
 
 
