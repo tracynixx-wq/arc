@@ -62,7 +62,7 @@ export default function GalleryApp() {
   const [activeView, setActiveView] = useState<"all" | "recent" | "favorites" | "videos" | "gifs" | "photos" | "trash">("all");
   const viewTitles = { all: "Все медиа", recent: "Недавно добавленные", favorites: "Избранное", videos: "Видео", gifs: "GIF", photos: "Фото", trash: "Корзина" };
 
-  const loadPage = useCallback(async (nextPage: number, query: string, view: typeof activeView = activeView) => {
+  const loadPage = useCallback(async (nextPage: number, query: string, view: typeof activeView) => {
     const response = await fetch(`/api/media?page=${nextPage}&q=${encodeURIComponent(query)}&view=${view}`, { cache: "no-store" });
     if (response.status === 401) return false;
     if (!response.ok) throw new Error("Не удалось загрузить архив.");
