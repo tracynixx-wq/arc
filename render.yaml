@@ -1,5 +1,5 @@
 services:
-  - type: worker
+  - type: web
     name: arc-queue-worker-staging
     runtime: docker
     plan: free
@@ -10,6 +10,7 @@ services:
     dockerContext: .
     dockerCommand: npm run start --workspace @arc/worker
     autoDeployTrigger: checksPass
+    healthCheckPath: /health
     envVars:
       - key: NEXT_PUBLIC_SUPABASE_URL
         fromService:

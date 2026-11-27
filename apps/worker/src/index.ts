@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { createServer } from "node:http";
 import archiver from "archiver";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
@@ -830,7 +831,28 @@ async function main() {
   if (runOnce) console.log("ARC worker one-shot completed", { workerId });
 }
 
-void main().catch((error: unknown) => {
-  console.error("ARC worker stopped:", error);
-  process.exitCode = 1;
+const healthServer = createServer((request, response) => {
+  if (request.url === "/health" && request.method === "GET") {
+    response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end(JSON.stringify({ ok: true, service: "arc-queue-worker" }));
+    return;
+  }
+  if (request.url === "/wake" && request.method === "POST") {
+    response.writeHead(202, { "content-type": "application/json", "cache-control": "no-store" });
+    response.end(JSON.stringify({ accepted: true }));
+    return;
+  }
+  response.writeHead(404, { "content-type": "application/json" });
+  response.end(JSON.stringify({ error: "Not found" }));
 });
+
+const port = Number(process.env.PORT ?? 10000);
+healthServer.listen(port, "0.0.0.0", () => {
+  console.log("ARC queue worker HTTP endpoint ready", { port });
+  void main().catch((error: unknown) => {
+    console.error("ARC worker stopped:", error);
+    process.exitCode = 1;
+    healthServer.close();
+  });
+});
+
