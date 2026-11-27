@@ -157,7 +157,7 @@ export async function POST(request: Request) {
     const command = text.split(/\s+/)[0].split("@")[0].toLowerCase();
     try {
       if (command === "/start") {
-        const webUrl = process.env.ARC_WEB_URL;
+        const webUrl = process.env.ARC_WEB_URL ?? process.env.RENDER_EXTERNAL_URL;
         const greeting = webUrl
           ? `ARC подключён. Откройте личный архив: ${webUrl}\nОтправляйте сюда фото, видео и GIF — после надёжного сохранения они появятся на сайте.`
           : "ARC подключён. Отправляйте сюда фото, видео и GIF — после надёжного сохранения они появятся в архиве.";
