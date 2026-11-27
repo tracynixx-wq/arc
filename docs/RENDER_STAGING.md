@@ -1,19 +1,38 @@
 # ARC staging deployment
 
-This repository is a monorepo. Deploy the web application and queue worker as separate Render services.
+ARC is a monorepo. The staging website is a separate Render Free web service; queue processing is designed to run as a one-shot GitHub Actions job so testing does not require a continuously running paid Render worker.
 
-## Services
+## Staging web service
 
-- `arc-web-staging`: Next.js web app, free plan, Frankfurt. Health endpoint: `/api/health`.
-- `arc-worker-staging`: Docker worker with FFmpeg, Frankfurt. The worker continuously polls Supabase queues.
+- Name: `arc-web-staging`
+- Runtime: Node.js / Next.js
+- Plan: Render Free
+- Region: Frankfurt
+- Branch: `arc-v1-foundation`
+- Health check: `/api/health`
 
-Both services are pinned to `arc-v1-foundation`; neither replaces the existing `arc` service or deploys from `main`.
+This Blueprint creates only the staging website. It does not adopt, update, or replace the existing production service named `arc`.
 
-## Required configuration
+## Queue executor
 
-Set the prompted values in Render for each service. Never commit secrets.
+The worker supports `npm run worker:once`. Each invocation recovers stale jobs, claims at most one Telegram job and one cover-processing job, handles them, then exits. The GitHub Actions workflow `.github/workflows/arc-worker.yml` can run this on a five-minute schedule or manually.
 
-Web:
+GitHub scheduled workflows execute only from the repository's default branch. The workflow is intentionally disabled unless repository variable `ARC_WORKER_ENABLED` is set to `true`. After the application and workflow are reviewed and promoted to the default branch, configure:
+
+Repository variable:
+- `ARC_WORKER_ENABLED=true`
+
+Repository Actions secrets:
+- `ARC_SUPABASE_URL`
+- `ARC_SUPABASE_SERVICE_ROLE_KEY`
+- `ARC_TELEGRAM_BOT_TOKEN`
+
+The repository is public, so standard GitHub-hosted runner usage for public repositories is available without using Render worker compute. Never place credentials in workflow YAML or commit them to the repository.
+
+## Web service environment
+
+Set these values in Render for `arc-web-staging`:
+
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `TELEGRAM_BOT_TOKEN`
@@ -21,27 +40,25 @@ Web:
 - `TELEGRAM_WEBHOOK_SECRET`
 - `ARC_WEB_URL` — the actual public URL of `arc-web-staging`
 
-Worker:
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `TELEGRAM_BOT_TOKEN`
-
 Use a dedicated staging Supabase project and a dedicated staging Telegram bot. Do not reuse production credentials until staging isolation has been verified.
 
-## Cost and deployment safety
+## Deployment safety
 
-The web service is configured on Render's free plan. Render does not offer always-on background workers on the free compute tier; the worker is configured at the smallest paid compute size (0.5 CPU / 512 MB, currently listed at $7/month). Applying this Blueprint can create a billable worker. Review the Render plan before approving the first Blueprint sync.
-
-This file only defines staging resources. Do not repoint the existing production service, merge this branch into `main`, or apply database migrations to the production Supabase project as part of staging setup.
+- No paid Render worker is defined in this Blueprint.
+- The existing Render service `arc` remains untouched and continues to use its current `main` configuration.
+- No Supabase migrations are applied automatically.
+- The worker workflow is disabled until explicitly enabled with the repository variable.
+- The app and workflow must be reviewed before merging the staging branch into the default branch.
 
 ## First deployment checklist
 
-1. Create a Render Blueprint from this repository and select `arc-v1-foundation`.
-2. Review the two resources and the worker's paid plan before applying.
-3. Enter staging-only Supabase and Telegram values.
-4. After the web service is live, set `ARC_WEB_URL` to its actual URL.
-5. Apply the reviewed Supabase migrations to the staging project only.
-6. Set the Telegram webhook to `https://<arc-web-staging-host>/api/telegram/webhook`, using the matching webhook secret.
-7. Verify `GET /api/health`, Telegram authentication, media ingest, cover generation, archive delivery, retries and cancellation with test media.
+1. Review the Render Blueprint plan. It should create only `arc-web-staging`.
+2. Apply it only after confirming the environment values and staging project.
+3. Set `ARC_WEB_URL` to the actual Render URL.
+4. Apply the reviewed migrations to the staging Supabase project only.
+5. Configure the Telegram webhook to `https://<arc-web-staging-host>/api/telegram/webhook` with the matching webhook secret.
+6. Review and promote the GitHub Actions worker workflow to the default branch.
+7. Add the three Actions secrets and set `ARC_WORKER_ENABLED=true`.
+8. Test Telegram authentication, media ingest, original storage verification, cover generation, archive delivery, retries and cancellation with test media.
 
 A green GitHub build is not an end-to-end test. Do not treat staging as production until all checks above pass.
