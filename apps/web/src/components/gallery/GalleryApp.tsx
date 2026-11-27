@@ -66,6 +66,8 @@ export default function GalleryApp() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<"loading" | "ready" | "telegram" | "error">("loading");
   const [message, setMessage] = useState("");
+  const [ownerPassword, setOwnerPassword] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
   const [active, setActive] = useState<MediaItem | null>(null);
   const [viewerFile, setViewerFile] = useState<ViewerFile | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
@@ -95,7 +97,7 @@ export default function GalleryApp() {
     const response = await fetch("/api/media?" + params.toString(), { cache: "no-store" });
     if (response.status === 401) {
       setItems([]);
-      setStatus("telegram");
+      setStatus("login");
       return false;
     }
     if (!response.ok) throw new Error("Не удалось загрузить архив.");
@@ -119,7 +121,7 @@ export default function GalleryApp() {
         if (loaded || !alive) return;
         const initData = window.Telegram?.WebApp?.initData;
         if (!initData) {
-          setStatus("telegram");
+          setStatus("login");
           return;
         }
         window.Telegram?.WebApp?.ready?.();
@@ -172,6 +174,30 @@ export default function GalleryApp() {
   const title = useMemo(() => active?.display_name || active?.filename || "", [active]);
   const activeIndex = active ? items.findIndex((item) => item.id === active.id) : -1;
   const currentTitle = activeCollectionId ? (collections.find((item) => item.id === activeCollectionId)?.name ?? "Коллекция") : activeTagId ? ("#" + (tags.find((item) => item.id === activeTagId)?.name ?? "Тег")) : viewTitles[activeView];
+
+  async function loginWithPassword(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!ownerPassword || loginBusy) return;
+    setLoginBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/auth/password", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ password: ownerPassword }),
+        cache: "no-store",
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Не удалось выполнить вход.");
+      setOwnerPassword("");
+      const loaded = await loadPage(1, "", "all");
+      if (!loaded) throw new Error("Сессия создана, но архив не загрузился. Повторите вход.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Ошибка входа.");
+    } finally {
+      setLoginBusy(false);
+    }
+  }
 
   async function changePage(nextPage: number) {
     const maxPage = Math.max(1, Math.ceil((total ?? 0) / 10));
@@ -527,7 +553,7 @@ export default function GalleryApp() {
     setItems([]);
     setSelectedIds(new Set());
     setActive(null);
-    setStatus("telegram");
+    setStatus("login");
   }
 
   return (
@@ -568,7 +594,7 @@ export default function GalleryApp() {
           </div>
 
           {status === "loading" && <div className="state-panel"><span className="loader" /><h2>Подключение к архиву</h2><p>Проверяем защищённую сессию.</p></div>}
-          {status === "telegram" && <div className="state-panel"><div className="state-icon">↗</div><h2>Войдите через Telegram</h2><p>Откройте ARC из личного Telegram-бота. Вход доступен только владельцу архива.</p><div className="empty-note"><span className="status-dot" /> Сессия сохраняется до выхода или отзыва доступа</div></div>}
+          {status === "telegram" && <div className="state-panel"><div className="state-icon">⌑</div><h2>Вход в ARC</h2><p>Введите личный код доступа владельца архива.</p><form className="owner-login" onSubmit={(event) => void loginWithPassword(event)}><input type="password" autoComplete="current-password" aria-label="Код доступа" placeholder="Код доступа" value={ownerPassword} onChange={(event) => setOwnerPassword(event.target.value)} required /><button className="secondary-button" type="submit" disabled={loginBusy || !ownerPassword}>{loginBusy ? "Проверка…" : "Войти"}</button></form>{message && <p className="login-error" role="alert">{message}</p>}<div className="empty-note"><span className="status-dot" /> Доступ только владельцу архива</div></div>}
           {status === "error" && <div className="state-panel"><div className="state-icon">!</div><h2>Не удалось подключиться</h2><p>{message}</p><button className="secondary-button" onClick={() => window.location.reload()}>Повторить</button></div>}
           {status === "ready" && items.length === 0 && <div className="state-panel"><div className="empty-art"><div className="art-card art-one">▧</div><div className="art-card art-two">▷</div><div className="art-card art-three">GIF</div></div><h2>{search ? "Ничего не найдено" : activeView === "trash" ? "Корзина пуста" : activeView === "favorites" ? "Избранное пока пусто" : "Архив пока пуст"}</h2><p>{search ? "Измените поисковый запрос." : activeView === "trash" ? "Удалённые файлы будут храниться здесь до окончательного удаления." : activeView === "favorites" ? "Отмечайте файлы сердечком, чтобы собрать их здесь." : "Отправляйте фото, видео и GIF своему Telegram-боту. После сохранения они появятся здесь."}</p></div>}
           {status === "ready" && items.length > 0 && <div className="masonry" aria-label="Медиаархив">

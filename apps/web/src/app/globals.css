@@ -287,3 +287,12 @@ h1 { margin: 9px 0 7px; font-size: clamp(26px, 3vw, 35px); letter-spacing: -.045
   .content { padding-left: 11px; padding-right: 11px; }
   .heading-meta { padding: 6px; }
 }
+
+
+.owner-login { display: flex; width: min(100%, 340px); gap: 8px; margin-top: 20px; }
+.owner-login input { min-width: 0; flex: 1; height: 40px; border: 1px solid #34313e; border-radius: 9px; background: #111319; color: #f4f1fb; padding: 0 12px; font: inherit; font-size: 13px; outline: none; }
+.owner-login input:focus { border-color: #9a7ce8; box-shadow: 0 0 0 3px #9a7ce822; }
+.owner-login .secondary-button { min-width: 84px; }
+.owner-login .secondary-button:disabled { opacity: .55; cursor: not-allowed; }
+.login-error { margin-top: 12px !important; color: #fca5a5 !important; }
+@media (max-width: 480px) { .owner-login { flex-direction: column; } .owner-login .secondary-button { width: 100%; } }
