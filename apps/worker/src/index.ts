@@ -502,16 +502,23 @@ async function processZipExport(job: ProcessingJob) {
     .update({ status: "running", error: null }).eq("id", exportId);
   if (markRunningError) throw markRunningError;
 
-  const { data: mediaRows, error: mediaError } = await supabase.from("media")
-    .select("id,filename,mime_type,size_bytes")
-    .in("id", ids).eq("is_trashed", false).is("purged_at", null);
-  if (mediaError) throw mediaError;
-  if ((mediaRows ?? []).length !== ids.length) throw new Error("Some selected media is missing or in the trash.");
+  const mediaRows: Array<{ id: string; filename: string; mime_type: string; size_bytes: number }> = [];
+  const fileRows: Array<{ media_id: string; storage_bucket: string; storage_key: string }> = [];
+  for (let offset = 0; offset < ids.length; offset += 500) {
+    const batch = ids.slice(offset, offset + 500);
+    const { data: mediaBatch, error: mediaError } = await supabase.from("media")
+      .select("id,filename,mime_type,size_bytes")
+      .in("id", batch).eq("is_trashed", false).is("purged_at", null);
+    if (mediaError) throw mediaError;
+    mediaRows.push(...(mediaBatch ?? []));
 
-  const { data: fileRows, error: filesError } = await supabase.from("media_files")
-    .select("media_id,storage_bucket,storage_key")
-    .in("media_id", ids).eq("file_role", "original").eq("is_current", true);
-  if (filesError) throw filesError;
+    const { data: filesBatch, error: filesError } = await supabase.from("media_files")
+      .select("media_id,storage_bucket,storage_key")
+      .in("media_id", batch).eq("file_role", "original").eq("is_current", true);
+    if (filesError) throw filesError;
+    fileRows.push(...(filesBatch ?? []));
+  }
+  if (mediaRows.length !== ids.length) throw new Error("Some selected media is missing or in the trash.");
   const fileById = new Map((fileRows ?? []).map((file) => [file.media_id, file]));
   const mediaById = new Map((mediaRows ?? []).map((item) => [item.id, item]));
   const tempDir = await mkdtemp(join(tmpdir(), "arc-export-"));

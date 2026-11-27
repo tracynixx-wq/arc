@@ -6,6 +6,26 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+let lastWorkerWakeAt = 0;
+
+function scheduleWorkerWake() {
+  const workerUrl = process.env.ARC_WORKER_URL;
+  if (!workerUrl || Date.now() - lastWorkerWakeAt < 15_000) return;
+  lastWorkerWakeAt = Date.now();
+  after(async () => {
+    try {
+      await fetch(new URL("/wake", workerUrl), {
+        method: "POST",
+        cache: "no-store",
+        signal: AbortSignal.timeout(90_000),
+      });
+    } catch (error) {
+      console.error("ARC worker wake request failed:", error instanceof Error ? error.message : "unknown error");
+    }
+  });
+}
+
+
 export async function POST(request: Request) {
   try {
     const owner = await getOwnerSession();
@@ -19,10 +39,15 @@ export async function POST(request: Request) {
 
     const ids = body.ids as string[];
     const supabase = createSupabaseAdmin();
-    const { data: media, error: mediaError } = await supabase.from("media")
-      .select("id").in("id", ids).eq("is_trashed", false).is("purged_at", null);
-    if (mediaError) return NextResponse.json({ error: "Could not validate selected media." }, { status: 503 });
-    if ((media ?? []).length !== ids.length) {
+    const foundIds: string[] = [];
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const { data: media, error: mediaError } = await supabase.from("media")
+        .select("id").in("id", ids.slice(offset, offset + 500))
+        .eq("is_trashed", false).is("purged_at", null);
+      if (mediaError) return NextResponse.json({ error: "Could not validate selected media." }, { status: 503 });
+      foundIds.push(...(media ?? []).map((item) => item.id));
+    }
+    if (foundIds.length !== ids.length) {
       return NextResponse.json({ error: "Some selected media is missing or in the trash." }, { status: 409 });
     }
 
@@ -45,20 +70,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Could not queue ZIP export." }, { status: 503 });
     }
 
-    const workerUrl = process.env.ARC_WORKER_URL;
-    if (workerUrl) {
-      after(async () => {
-        try {
-          await fetch(new URL("/wake", workerUrl), {
-            method: "POST",
-            cache: "no-store",
-            signal: AbortSignal.timeout(90_000),
-          });
-        } catch (error) {
-          console.error("ARC worker wake request failed:", error instanceof Error ? error.message : "unknown error");
-        }
-      });
-    }
+    scheduleWorkerWake();
 
     return NextResponse.json({ exportId: exportJob.id, status: "queued" }, {
       status: 202,

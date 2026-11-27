@@ -1,10 +1,30 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { getOwnerSession } from "@/lib/auth/session";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+let lastWorkerWakeAt = 0;
+
+function scheduleWorkerWake() {
+  const workerUrl = process.env.ARC_WORKER_URL;
+  if (!workerUrl || Date.now() - lastWorkerWakeAt < 15_000) return;
+  lastWorkerWakeAt = Date.now();
+  after(async () => {
+    try {
+      await fetch(new URL("/wake", workerUrl), {
+        method: "POST",
+        cache: "no-store",
+        signal: AbortSignal.timeout(90_000),
+      });
+    } catch (error) {
+      console.error("ARC worker wake request failed:", error instanceof Error ? error.message : "unknown error");
+    }
+  });
+}
+
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -35,6 +55,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       });
     }
 
+    if (job.status === "queued" || job.status === "running") scheduleWorkerWake();
     return NextResponse.json({ status: job.status, error: job.error }, {
       headers: { "Cache-Control": "private, no-store" },
     });
