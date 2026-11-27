@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: arc-web-staging
+    runtime: node
+    plan: free
+    region: frankfurt
+    branch: arc-v1-foundation
+    buildCommand: npm install --no-audit --no-fund && npm run build --workspace @arc/web
+    startCommand: npm run start --workspace @arc/web
+    healthCheckPath: /api/health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_OWNER_ID
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: ARC_WEB_URL
+        sync: false
+
+  - type: worker
+    name: arc-worker-staging
+    runtime: docker
+    plan: 0.5c-512mb
+    region: frankfurt
+    branch: arc-v1-foundation
+    dockerfilePath: ./apps/worker/Dockerfile
+    dockerContext: .
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
