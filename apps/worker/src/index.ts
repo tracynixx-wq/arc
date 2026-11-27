@@ -377,13 +377,15 @@ async function retryProcessingJob(job: ProcessingJob, error: unknown) {
   const exhausted = job.attempts >= job.max_attempts;
   const waitSeconds = Math.min(900, 15 * (2 ** Math.max(0, job.attempts - 1)));
   const message = error instanceof Error ? error.message : "Unknown processing error";
-  await supabase.from("processing_jobs").update({
+  const { error: updateError } = await supabase.from("processing_jobs").update({
     status: exhausted ? "failed" : "queued",
     available_at: new Date(Date.now() + waitSeconds * 1000).toISOString(),
     locked_at: null, locked_by: null, heartbeat_at: null,
     finished_at: exhausted ? new Date().toISOString() : null,
     error: { message, retryable: !exhausted },
   }).eq("id", job.id);
+  if (updateError) console.error("Processing job retry state update failed", { jobId: job.id, message: updateError.message });
+  console.error("Processing job failed", { jobId: job.id, jobType: job.job_type, exhausted, message });
   if (job.job_type === "zip_export" && typeof job.payload.export_id === "string") {
     await supabase.from("export_jobs").update({
       status: exhausted ? "failed" : "queued",
@@ -483,9 +485,19 @@ async function processZipExport(job: ProcessingJob) {
   const exportId = typeof job.payload.export_id === "string" ? job.payload.export_id : "";
   if (!exportId) throw new Error("ZIP export job has no export_id.");
 
+  console.log("ZIP export job started", { jobId: job.id, exportId });
   const { data: exportJob, error: exportReadError } = await supabase.from("export_jobs")
-    .select("id,status,options").eq("id", exportId).maybeSingle();
-  if (exportReadError || !exportJob) throw new Error("ZIP export record is missing.");
+    .select("id,status,options").eq("id", exportId)
+    .abortSignal(AbortSignal.timeout(20_000)).maybeSingle();
+  if (exportReadError || !exportJob) {
+    console.error("ZIP export record lookup failed", { exportId, error: exportReadError?.message ?? "not found" });
+    throw new Error("ZIP export record is missing or could not be read.");
+  }
+  console.log("ZIP export record loaded", {
+    exportId,
+    status: exportJob.status,
+    optionsPresent: Boolean(exportJob.options),
+  });
   if (exportJob.status === "cancelled" || exportJob.status === "expired") {
     await supabase.from("processing_jobs").update({
       status: exportJob.status === "cancelled" ? "cancelled" : "failed",
@@ -496,7 +508,11 @@ async function processZipExport(job: ProcessingJob) {
 
   const options = exportJob.options as Record<string, unknown>;
   const ids = Array.isArray(options.media_ids) ? options.media_ids.filter((id): id is string => typeof id === "string") : [];
-  if (!ids.length || ids.length > 10_000) throw new Error("ZIP export contains an invalid media selection.");
+  if (!ids.length || ids.length > 10_000) {
+    console.warn("ZIP export rejected invalid selection", { exportId, count: ids.length });
+    throw new Error("ZIP export contains an invalid media selection.");
+  }
+  console.log("ZIP export selection validated", { exportId, count: ids.length });
 
   const { error: markRunningError } = await supabase.from("export_jobs")
     .update({ status: "running", error: null }).eq("id", exportId);
@@ -773,6 +789,7 @@ async function processTelegramJob(job: TelegramJob) {
 }
 
 async function processProcessingJob(job: ProcessingJob) {
+  console.log("Processing job started", { jobId: job.id, jobType: job.job_type, attempt: job.attempts });
   const heartbeat = setInterval(() => {
     void supabase.from("processing_jobs").update({ heartbeat_at: new Date().toISOString() }).eq("id", job.id).eq("status", "running");
   }, 30_000);
