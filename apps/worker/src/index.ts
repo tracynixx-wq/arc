@@ -16,6 +16,7 @@ const telegramApiBase = (process.env.TELEGRAM_API_BASE_URL ?? "https://api.teleg
 const telegramFileBase = (process.env.TELEGRAM_FILE_BASE_URL ?? "https://api.telegram.org/file").replace(/\/$/, "");
 const tusEndpointOverride = process.env.SUPABASE_TUS_ENDPOINT;
 const workerId = process.env.RENDER_INSTANCE_ID ?? `arc-worker-${randomUUID()}`;
+const runOnce = process.argv.includes("--once");
 
 if (!supabaseUrl || !serviceKey || !telegramToken) {
   throw new Error("Worker requires Supabase URL, service role key and Telegram bot token.");
@@ -655,12 +656,15 @@ async function main() {
       if (coverResult.error) throw coverResult.error;
       const coverJob = (coverResult.data ?? [])[0] as ProcessingJob | undefined;
       if (coverJob) await processProcessingJob(coverJob);
+      if (runOnce) break;
       if (!telegramJob && !coverJob) await delay(2500);
     } catch (error) {
       console.error("ARC worker loop error:", error instanceof Error ? error.message : error);
+      if (runOnce) throw error;
       await delay(5000);
     }
   }
+  if (runOnce) console.log("ARC worker one-shot completed", { workerId });
 }
 
 void main().catch((error: unknown) => {
