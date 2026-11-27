@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { getOwnerSession } from "@/lib/auth/session";
 import { createSupabaseAdmin } from "@/lib/supabase/admin";
 
@@ -43,6 +43,21 @@ export async function POST(request: Request) {
         status: "failed", error: { message: "Could not enqueue ZIP export." }, finished_at: new Date().toISOString(),
       }).eq("id", exportJob.id);
       return NextResponse.json({ error: "Could not queue ZIP export." }, { status: 503 });
+    }
+
+    const workerUrl = process.env.ARC_WORKER_URL;
+    if (workerUrl) {
+      after(async () => {
+        try {
+          await fetch(new URL("/wake", workerUrl), {
+            method: "POST",
+            cache: "no-store",
+            signal: AbortSignal.timeout(90_000),
+          });
+        } catch (error) {
+          console.error("ARC worker wake request failed:", error instanceof Error ? error.message : "unknown error");
+        }
+      });
     }
 
     return NextResponse.json({ exportId: exportJob.id, status: "queued" }, {
