@@ -2,7 +2,6 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { zipSync } from "fflate";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type MediaItem = {
@@ -391,56 +390,36 @@ export default function GalleryApp() {
     if (!selectedIds.size) return;
     setZipBusy(true);
     try {
-      const ids = [...selectedIds];
-      const sources: Array<{ id: string; filename: string; sizeBytes: number; url: string }> = [];
-      for (let offset = 0; offset < ids.length; offset += 100) {
-        const response = await fetch("/api/media/bulk/zip-sources", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ ids: ids.slice(offset, offset + 100) }),
-        });
-        const result = await response.json() as { files?: Array<{ id: string; filename: string; sizeBytes: number; url: string }>; error?: string };
-        if (!response.ok || !result.files) throw new Error(result.error ?? "Не удалось подготовить ZIP.");
-        sources.push(...result.files);
+      const response = await fetch("/api/exports", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: [...selectedIds] }),
+      });
+      const created = await response.json() as { exportId?: string; error?: string };
+      if (!response.ok || !created.exportId) {
+        throw new Error(created.error ?? "Не удалось поставить ZIP-экспорт в очередь.");
       }
 
-      const totalBytes = sources.reduce((sum, file) => sum + file.sizeBytes, 0);
-      const browserLimit = 40 * 1024 * 1024;
-      if (totalBytes > browserLimit) {
-        throw new Error("Выбранный архив слишком велик для безопасной сборки в браузере. Фоновый ZIP-экспорт ещё не подключён.");
-      }
-
-      const entries = Object.create(null) as Record<string, Uint8Array>;
-      const usedNames = new Set<string>();
-      for (const source of sources) {
-        const response = await fetch(source.url, { cache: "no-store" });
-        if (!response.ok) throw new Error("Не удалось скачать файл «" + source.filename + "» для ZIP.");
-        const data = new Uint8Array(await response.arrayBuffer());
-        const dot = source.filename.lastIndexOf(".");
-        const base = dot > 0 ? source.filename.slice(0, dot) : source.filename;
-        const extension = dot > 0 ? source.filename.slice(dot) : "";
-        let name = source.filename;
-        let suffix = 2;
-        while (usedNames.has(name.toLocaleLowerCase())) {
-          name = base + " (" + suffix + ")" + extension;
-          suffix += 1;
+      setMessage("ZIP-экспорт запущен. Подготовка выполняется на сервере.");
+      for (let attempt = 0; attempt < 450; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        const statusResponse = await fetch("/api/exports/" + created.exportId, { cache: "no-store" });
+        const status = await statusResponse.json() as {
+          status?: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "expired";
+          downloadUrl?: string;
+          error?: string;
+        };
+        if (!statusResponse.ok) throw new Error(status.error ?? "Не удалось проверить состояние ZIP-экспорта.");
+        if (status.status === "succeeded" && status.downloadUrl) {
+          window.location.assign(status.downloadUrl);
+          setMessage("ZIP-архив готов и загружается.");
+          return;
         }
-        usedNames.add(name.toLocaleLowerCase());
-        entries[name] = data;
+        if (status.status === "failed" || status.status === "cancelled" || status.status === "expired") {
+          throw new Error(status.error ?? "ZIP-экспорт завершился без готового архива.");
+        }
       }
-
-      const archive = zipSync(entries, { level: 0 });
-      const archiveBytes = new Uint8Array(archive.byteLength);
-      archiveBytes.set(archive);
-      const blob = new Blob([archiveBytes.buffer], { type: "application/zip" });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = "ARC-export-" + new Date().toISOString().slice(0, 10) + ".zip";
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
-      setMessage("ZIP-архив подготовлен: " + sources.length + " файлов.");
+      throw new Error("Экспорт ещё выполняется. Он продолжится на сервере; обновите страницу и повторите проверку позже.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Ошибка ZIP-экспорта.");
     } finally {

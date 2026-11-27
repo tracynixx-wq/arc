@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import archiver from "archiver";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -378,6 +379,13 @@ async function retryProcessingJob(job: ProcessingJob, error: unknown) {
     finished_at: exhausted ? new Date().toISOString() : null,
     error: { message, retryable: !exhausted },
   }).eq("id", job.id);
+  if (job.job_type === "zip_export" && typeof job.payload.export_id === "string") {
+    await supabase.from("export_jobs").update({
+      status: exhausted ? "failed" : "queued",
+      error: { message, retryable: !exhausted },
+      ...(exhausted ? { finished_at: new Date().toISOString() } : {}),
+    }).eq("id", job.payload.export_id);
+  }
   if (exhausted && job.media_id) {
     await supabase.from("media").update({ processing_status: "partial" }).eq("id", job.media_id);
   }
@@ -461,6 +469,144 @@ async function processCover(job: ProcessingJob) {
       locked_at: null, locked_by: null, heartbeat_at: null, error: null,
     }).eq("id", job.id);
     if (jobUpdateError) throw jobUpdateError;
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function processZipExport(job: ProcessingJob) {
+  const exportId = typeof job.payload.export_id === "string" ? job.payload.export_id : "";
+  if (!exportId) throw new Error("ZIP export job has no export_id.");
+
+  const { data: exportJob, error: exportReadError } = await supabase.from("export_jobs")
+    .select("id,status,options").eq("id", exportId).maybeSingle();
+  if (exportReadError || !exportJob) throw new Error("ZIP export record is missing.");
+  if (exportJob.status === "cancelled" || exportJob.status === "expired") {
+    await supabase.from("processing_jobs").update({
+      status: exportJob.status === "cancelled" ? "cancelled" : "failed",
+      finished_at: new Date().toISOString(), locked_at: null, locked_by: null, heartbeat_at: null,
+    }).eq("id", job.id);
+    return;
+  }
+
+  const options = exportJob.options as Record<string, unknown>;
+  const ids = Array.isArray(options.media_ids) ? options.media_ids.filter((id): id is string => typeof id === "string") : [];
+  if (!ids.length || ids.length > 10_000) throw new Error("ZIP export contains an invalid media selection.");
+
+  const { error: markRunningError } = await supabase.from("export_jobs")
+    .update({ status: "running", error: null }).eq("id", exportId);
+  if (markRunningError) throw markRunningError;
+
+  const { data: mediaRows, error: mediaError } = await supabase.from("media")
+    .select("id,filename,mime_type,size_bytes")
+    .in("id", ids).eq("is_trashed", false).is("purged_at", null);
+  if (mediaError) throw mediaError;
+  if ((mediaRows ?? []).length !== ids.length) throw new Error("Some selected media is missing or in the trash.");
+
+  const { data: fileRows, error: filesError } = await supabase.from("media_files")
+    .select("media_id,storage_bucket,storage_key")
+    .in("media_id", ids).eq("file_role", "original").eq("is_current", true);
+  if (filesError) throw filesError;
+  const fileById = new Map((fileRows ?? []).map((file) => [file.media_id, file]));
+  const mediaById = new Map((mediaRows ?? []).map((item) => [item.id, item]));
+  const tempDir = await mkdtemp(join(tmpdir(), "arc-export-"));
+  const zipPath = join(tempDir, "archive.zip");
+
+  try {
+    const output = createWriteStream(zipPath);
+    const archive = archiver("zip", { zlib: { level: 0 } });
+    const completed = new Promise<void>((resolve, reject) => {
+      output.once("close", () => resolve());
+      output.once("error", reject);
+      archive.once("error", reject);
+      archive.once("warning", reject);
+    });
+    archive.pipe(output);
+
+    const usedNames = new Set<string>();
+    const manifest: Array<{ id: string; filename: string; mime_type: string; size_bytes: number }> = [];
+    for (const id of ids) {
+      const item = mediaById.get(id);
+      const original = fileById.get(id);
+      if (!item || !original) throw new Error("An original file is missing from the archive.");
+      const { data: signed, error: signedError } = await supabase.storage
+        .from(original.storage_bucket).createSignedUrl(original.storage_key, 3600);
+      if (signedError || !signed?.signedUrl) throw new Error("Could not sign an original media file.");
+      const response = await fetch(signed.signedUrl, { cache: "no-store" });
+      if (!response.ok || !response.body) throw new Error("Could not download " + item.filename + " for ZIP export.");
+
+      const originalName = safeFilename(item.filename, id);
+      const dot = originalName.lastIndexOf(".");
+      const base = dot > 0 ? originalName.slice(0, dot) : originalName;
+      const extension = dot > 0 ? originalName.slice(dot) : "";
+      let name = originalName;
+      let suffix = 2;
+      while (usedNames.has(name.toLocaleLowerCase())) {
+        name = base + " (" + suffix + ")" + extension;
+        suffix += 1;
+      }
+      usedNames.add(name.toLocaleLowerCase());
+      archive.append(Readable.fromWeb(response.body as never), { name });
+      manifest.push({ id, filename: name, mime_type: item.mime_type, size_bytes: Number(item.size_bytes) });
+    }
+
+    archive.append(Buffer.from(JSON.stringify({
+      format: "ARC ZIP export",
+      created_at: new Date().toISOString(),
+      files: manifest,
+    }, null, 2)), { name: "ARC-manifest.json" });
+
+    try {
+      await archive.finalize();
+      await completed;
+    } catch (error) {
+      archive.abort();
+      output.destroy();
+      await completed.catch(() => undefined);
+      throw error;
+    }
+
+    const zipStat = await stat(zipPath);
+    if (!zipStat.size) throw new Error("Generated ZIP archive is empty.");
+    const digest = createHash("sha256");
+    for await (const chunk of createReadStream(zipPath)) digest.update(chunk as Buffer);
+    const objectKey = "exports/" + exportId + ".zip";
+    const { data: previous, error: previousError } = await supabase.storage.from("arc-temporary")
+      .list("exports", { search: exportId + ".zip", limit: 5 });
+    if (previousError) throw previousError;
+    if (previous?.some((entry) => entry.name === exportId + ".zip")) {
+      const { error: removeError } = await supabase.storage.from("arc-temporary").remove([objectKey]);
+      if (removeError) throw removeError;
+    }
+
+    await uploadTus(zipPath, "arc-temporary", objectKey, "application/zip");
+    await verifyStorageObject("arc-temporary", objectKey);
+
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const { error: exportUpdateError } = await supabase.from("export_jobs").update({
+      status: "succeeded",
+      storage_bucket: "arc-temporary",
+      storage_key: objectKey,
+      part_count: 1,
+      expires_at: expiresAt,
+      error: null,
+      finished_at: new Date().toISOString(),
+    }).eq("id", exportId);
+    if (exportUpdateError) throw exportUpdateError;
+
+    const { error: processingUpdateError } = await supabase.from("processing_jobs").update({
+      status: "succeeded", finished_at: new Date().toISOString(),
+      locked_at: null, locked_by: null, heartbeat_at: null, error: null,
+      result: { export_id: exportId, size_bytes: zipStat.size, sha256: digest.digest("hex"), file_count: manifest.length },
+    }).eq("id", job.id);
+    if (processingUpdateError) throw processingUpdateError;
+
+    await supabase.from("activity_logs").insert({
+      action: "export.zip.completed",
+      entity_type: "export",
+      entity_id: exportId,
+      details: { file_count: manifest.length, size_bytes: zipStat.size },
+    });
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -623,6 +769,10 @@ async function processProcessingJob(job: ProcessingJob) {
       await processCover(job);
       return;
     }
+    if (job.job_type === "zip_export") {
+      await processZipExport(job);
+      return;
+    }
     // Backups remain queued until an independent backup destination is configured.
     await supabase.from("processing_jobs").update({
       status: "queued", attempts: Math.max(0, job.attempts - 1),
@@ -656,8 +806,14 @@ async function main() {
       if (coverResult.error) throw coverResult.error;
       const coverJob = (coverResult.data ?? [])[0] as ProcessingJob | undefined;
       if (coverJob) await processProcessingJob(coverJob);
+
+      const zipResult = await supabase.rpc("claim_zip_export_jobs", { p_worker_id: workerId, p_batch_size: 1 });
+      if (zipResult.error) throw zipResult.error;
+      const zipJob = (zipResult.data ?? [])[0] as ProcessingJob | undefined;
+      if (zipJob) await processProcessingJob(zipJob);
+
       if (runOnce) break;
-      if (!telegramJob && !coverJob) await delay(2500);
+      if (!telegramJob && !coverJob && !zipJob) await delay(2500);
     } catch (error) {
       console.error("ARC worker loop error:", error instanceof Error ? error.message : error);
       if (runOnce) throw error;
