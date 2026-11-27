@@ -1,22 +1,24 @@
 services:
-  - type: web
-    name: arc-web-staging
-    runtime: node
+  - type: worker
+    name: arc-queue-worker-staging
+    runtime: docker
     plan: free
     region: frankfurt
+    repo: https://github.com/tracynixx-wq/arc
     branch: arc-v1-foundation
-    buildCommand: npm install --no-audit --no-fund && npm run build --workspace @arc/web
-    startCommand: npm run start --workspace @arc/web
-    healthCheckPath: /api/health
+    dockerfilePath: apps/worker/Dockerfile
+    dockerContext: .
+    dockerCommand: npm run start --workspace @arc/worker
     autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 300
     envVars:
       - key: NEXT_PUBLIC_SUPABASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: arc-web-staging-e03a
+          envVarKey: NEXT_PUBLIC_SUPABASE_URL
       - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_OWNER_ID
-        sync: false
-      - key: TELEGRAM_WEBHOOK_SECRET
-        sync: false
+        fromService:
+          type: web
+          name: arc-web-staging-e03a
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY

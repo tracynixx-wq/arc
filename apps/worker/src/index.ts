@@ -19,8 +19,11 @@ const tusEndpointOverride = process.env.SUPABASE_TUS_ENDPOINT;
 const workerId = process.env.RENDER_INSTANCE_ID ?? `arc-worker-${randomUUID()}`;
 const runOnce = process.argv.includes("--once");
 
-if (!supabaseUrl || !serviceKey || !telegramToken) {
-  throw new Error("Worker requires Supabase URL, service role key and Telegram bot token.");
+if (!supabaseUrl || !serviceKey) {
+  throw new Error("Worker requires Supabase URL and service role key.");
+}
+if (!telegramToken) {
+  console.warn("Telegram ingestion and archive delivery are paused; media processing and ZIP exports remain enabled.");
 }
 
 const supabase = createClient(supabaseUrl, serviceKey, {
@@ -143,6 +146,7 @@ async function verifyStorageObject(bucket: string, objectKey: string) {
 }
 
 async function telegramCall(method: string, body: Record<string, unknown>): Promise<{ message_id?: number }> {
+  if (!telegramToken) throw new Error("Telegram Bot API is not configured.");
   const response = await fetch(`${telegramApiBase}/bot${telegramToken}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -797,10 +801,13 @@ async function main() {
         lastRecovery = Date.now();
       }
 
-      const telegramResult = await supabase.rpc("claim_telegram_jobs", { p_worker_id: workerId, p_batch_size: 1 });
-      if (telegramResult.error) throw telegramResult.error;
-      const telegramJob = (telegramResult.data ?? [])[0] as TelegramJob | undefined;
-      if (telegramJob) await processTelegramJob(telegramJob);
+      let telegramJob: TelegramJob | undefined;
+      if (telegramToken) {
+        const telegramResult = await supabase.rpc("claim_telegram_jobs", { p_worker_id: workerId, p_batch_size: 1 });
+        if (telegramResult.error) throw telegramResult.error;
+        telegramJob = (telegramResult.data ?? [])[0] as TelegramJob | undefined;
+        if (telegramJob) await processTelegramJob(telegramJob);
+      }
 
       const coverResult = await supabase.rpc("claim_cover_jobs", { p_worker_id: workerId, p_batch_size: 1 });
       if (coverResult.error) throw coverResult.error;
