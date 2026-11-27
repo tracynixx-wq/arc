@@ -23,6 +23,36 @@ type TelegramMessage = {
 type TelegramCallbackQuery = { id: string; from: TelegramUser; message?: TelegramMessage; data?: string };
 type TelegramUpdate = { update_id: number; message?: TelegramMessage; callback_query?: TelegramCallbackQuery };
 
+const MAX_WEBHOOK_BODY_BYTES = 1_000_000;
+
+async function readLimitedJson<T>(request: Request): Promise<T> {
+  if (!request.body) throw new Error("EMPTY_BODY");
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_WEBHOOK_BODY_BYTES) {
+        await reader.cancel();
+        throw new Error("PAYLOAD_TOO_LARGE");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(bytes)) as T;
+}
+
 async function sendTelegramMessage(token: string, chatId: number, text: string, replyMarkup?: Record<string, unknown>) {
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: "POST",
@@ -64,13 +94,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
 
-  const contentLength = Number(request.headers.get("content-length") ?? "0");
-  if (contentLength > 1_000_000) return NextResponse.json({ error: "Payload too large." }, { status: 413 });
+  const contentLengthHeader = request.headers.get("content-length");
+  if (contentLengthHeader && Number(contentLengthHeader) > MAX_WEBHOOK_BODY_BYTES) {
+    return NextResponse.json({ error: "Payload too large." }, { status: 413 });
+  }
 
   let update: TelegramUpdate;
   try {
-    update = await request.json() as TelegramUpdate;
-  } catch {
+    update = await readLimitedJson<TelegramUpdate>(request);
+  } catch (error) {
+    if (error instanceof Error && error.message === "PAYLOAD_TOO_LARGE") {
+      return NextResponse.json({ error: "Payload too large." }, { status: 413 });
+    }
     return NextResponse.json({ error: "Invalid update." }, { status: 400 });
   }
 
