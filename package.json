@@ -12,7 +12,8 @@
     "build": "npm run build --workspace @arc/web",
     "lint": "npm run lint --workspace @arc/web",
     "typecheck": "npm run typecheck --workspace @arc/web && npm run typecheck --workspace @arc/worker",
-    "telegram:webhook:set": "node scripts/set-telegram-webhook.mjs"
+    "telegram:webhook:set": "node scripts/set-telegram-webhook.mjs",
+    "worker:once": "npm run run-once --workspace @arc/worker"
   },
   "engines": {
     "node": ">=22.0.0",
