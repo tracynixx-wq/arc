@@ -855,10 +855,16 @@ async function main() {
   if (runOnce) console.log("ARC worker one-shot completed", { workerId });
 }
 
-const healthServer = createServer((request, response) => {
+const healthServer = createServer(async (request, response) => {
   if (request.url === "/health" && request.method === "GET") {
+    const { error } = await supabase.from("processing_jobs").select("id").limit(1);
+    if (error) {
+      response.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+      response.end(JSON.stringify({ ok: false, database: "unavailable" }));
+      return;
+    }
     response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-    response.end(JSON.stringify({ ok: true, service: "arc-queue-worker" }));
+    response.end(JSON.stringify({ ok: true, service: "arc-queue-worker", database: "ok" }));
     return;
   }
   if (request.url === "/wake" && request.method === "POST") {
