@@ -35,3 +35,5 @@ jobs:
         run: npm run lint
       - name: Production build
         run: npm run build
+      - name: Worker Docker build
+        run: docker build --file apps/worker/Dockerfile --tag arc-worker:ci .
