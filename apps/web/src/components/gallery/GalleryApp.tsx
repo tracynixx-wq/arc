@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent } from "react";
 
 type MediaItem = {
   id: string;
@@ -64,7 +65,7 @@ export default function GalleryApp() {
   const [hasMore, setHasMore] = useState(false);
   const [total, setTotal] = useState<number | null>(null);
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<"loading" | "ready" | "telegram" | "error">("loading");
+  const [status, setStatus] = useState<"loading" | "ready" | "login" | "error">("loading");
   const [message, setMessage] = useState("");
   const [ownerPassword, setOwnerPassword] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
@@ -175,7 +176,7 @@ export default function GalleryApp() {
   const activeIndex = active ? items.findIndex((item) => item.id === active.id) : -1;
   const currentTitle = activeCollectionId ? (collections.find((item) => item.id === activeCollectionId)?.name ?? "Коллекция") : activeTagId ? ("#" + (tags.find((item) => item.id === activeTagId)?.name ?? "Тег")) : viewTitles[activeView];
 
-  async function loginWithPassword(event: React.FormEvent<HTMLFormElement>) {
+  async function loginWithPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!ownerPassword || loginBusy) return;
     setLoginBusy(true);
@@ -594,7 +595,7 @@ export default function GalleryApp() {
           </div>
 
           {status === "loading" && <div className="state-panel"><span className="loader" /><h2>Подключение к архиву</h2><p>Проверяем защищённую сессию.</p></div>}
-          {status === "telegram" && <div className="state-panel"><div className="state-icon">⌑</div><h2>Вход в ARC</h2><p>Введите личный код доступа владельца архива.</p><form className="owner-login" onSubmit={(event) => void loginWithPassword(event)}><input type="password" autoComplete="current-password" aria-label="Код доступа" placeholder="Код доступа" value={ownerPassword} onChange={(event) => setOwnerPassword(event.target.value)} required /><button className="secondary-button" type="submit" disabled={loginBusy || !ownerPassword}>{loginBusy ? "Проверка…" : "Войти"}</button></form>{message && <p className="login-error" role="alert">{message}</p>}<div className="empty-note"><span className="status-dot" /> Доступ только владельцу архива</div></div>}
+          {status === "login" && <div className="state-panel"><div className="state-icon">⌑</div><h2>Вход в ARC</h2><p>Введите личный код доступа владельца архива.</p><form className="owner-login" onSubmit={(event) => void loginWithPassword(event)}><input type="password" autoComplete="current-password" aria-label="Код доступа" placeholder="Код доступа" value={ownerPassword} onChange={(event) => setOwnerPassword(event.target.value)} required /><button className="secondary-button" type="submit" disabled={loginBusy || !ownerPassword}>{loginBusy ? "Проверка…" : "Войти"}</button></form>{message && <p className="login-error" role="alert">{message}</p>}<div className="empty-note"><span className="status-dot" /> Доступ только владельцу архива</div></div>}
           {status === "error" && <div className="state-panel"><div className="state-icon">!</div><h2>Не удалось подключиться</h2><p>{message}</p><button className="secondary-button" onClick={() => window.location.reload()}>Повторить</button></div>}
           {status === "ready" && items.length === 0 && <div className="state-panel"><div className="empty-art"><div className="art-card art-one">▧</div><div className="art-card art-two">▷</div><div className="art-card art-three">GIF</div></div><h2>{search ? "Ничего не найдено" : activeView === "trash" ? "Корзина пуста" : activeView === "favorites" ? "Избранное пока пусто" : "Архив пока пуст"}</h2><p>{search ? "Измените поисковый запрос." : activeView === "trash" ? "Удалённые файлы будут храниться здесь до окончательного удаления." : activeView === "favorites" ? "Отмечайте файлы сердечком, чтобы собрать их здесь." : "Отправляйте фото, видео и GIF своему Telegram-боту. После сохранения они появятся здесь."}</p></div>}
           {status === "ready" && items.length > 0 && <div className="masonry" aria-label="Медиаархив">

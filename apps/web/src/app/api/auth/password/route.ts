@@ -24,7 +24,7 @@ function allowedAttempt(ip: string) {
 export async function POST(request: Request) {
   const configuredPassword = process.env.ARC_OWNER_PASSWORD;
   const ownerId = process.env.TELEGRAM_OWNER_ID;
-  if (!configuredPassword || configuredPassword.length < 24 || !ownerId || !/^\\d+$/.test(ownerId)) {
+  if (!configuredPassword || configuredPassword.length < 24 || !ownerId || !/^\d+$/.test(ownerId)) {
     return NextResponse.json({ error: "Авторизация владельца не настроена." }, { status: 503 });
   }
 
