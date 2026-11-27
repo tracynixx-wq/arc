@@ -109,11 +109,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid update." }, { status: 400 });
   }
 
+  if (!update || typeof update !== "object" || Array.isArray(update) ||
+      !Number.isSafeInteger(update.update_id)) {
+    return NextResponse.json({ error: "Invalid update." }, { status: 400 });
+  }
+
   const message = update.message;
   const callback = update.callback_query;
   const actor = callback?.from ?? message?.from;
   const chat = callback?.message?.chat ?? message?.chat;
-  if (!Number.isSafeInteger(update.update_id) || !actor || !chat ||
+  if (!actor || !chat || !Number.isSafeInteger(actor.id) || !Number.isSafeInteger(chat.id) ||
       String(actor.id) !== ownerId || chat.type !== "private" || chat.id !== actor.id) {
     return NextResponse.json({ ok: true });
   }
