@@ -10,7 +10,6 @@ services:
     dockerContext: .
     dockerCommand: npm run start --workspace @arc/worker
     autoDeployTrigger: checksPass
-    maxShutdownDelaySeconds: 300
     envVars:
       - key: NEXT_PUBLIC_SUPABASE_URL
         fromService:
