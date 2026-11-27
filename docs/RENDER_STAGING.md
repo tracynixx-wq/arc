@@ -38,7 +38,7 @@ Set these values in Render for `arc-web-staging`:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_OWNER_ID`
 - `TELEGRAM_WEBHOOK_SECRET`
-- `ARC_WEB_URL` — the actual public URL of `arc-web-staging`
+- `ARC_WEB_URL` — optional override; if omitted, the app uses Render’s built-in `RENDER_EXTERNAL_URL`
 
 Use a dedicated staging Supabase project and a dedicated staging Telegram bot. Do not reuse production credentials until staging isolation has been verified.
 
