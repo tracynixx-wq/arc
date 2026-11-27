@@ -161,7 +161,7 @@ export async function POST(request: Request) {
         const greeting = webUrl
           ? `ARC подключён. Откройте личный архив: ${webUrl}\nОтправляйте сюда фото, видео и GIF — после надёжного сохранения они появятся на сайте.`
           : "ARC подключён. Отправляйте сюда фото, видео и GIF — после надёжного сохранения они появятся в архиве.";
-        await sendTelegramMessage(token, message.chat.id, greeting, webUrl ? { inline_keyboard: [[{ text: "Открыть ARC", web_app: { url: webUrl } }]] } : undefined);
+        await sendTelegramMessage(token, message.chat.id, greeting, webUrl ? { inline_keyboard: [[{ text: "Открыть ARC", url: webUrl }]] } : undefined);
       } else if (command === "/help") {
         await sendTelegramMessage(token, message.chat.id,
           "/status — состояние очередей\n/stats — статистика архива\n/send_all — отправить архив в этот чат\n/cancel — остановить ожидающую отправку\n/help — помощь");
